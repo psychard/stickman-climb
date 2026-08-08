@@ -1,0 +1,17 @@
+{
+  "name": "elizabeth-game-climb",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Prototype: 2D bouldering game for iPhone Safari. Drag limbs onto holds.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host --port 5173",
+    "verify": "node tools/verify-wall.mjs",
+    "sim": "node tools/sim-check.mjs"
+  },
+  "devDependencies": {
+    "vite": "^7.1.3"
+  }
+}

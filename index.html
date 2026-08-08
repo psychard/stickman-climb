@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- viewport-fit=cover + no user scaling: drags must never become pinch/zoom. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0b0d11" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>climb</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #0b0d11;
+        /* Kill Safari's pull-to-refresh and rubber-band scroll. */
+        overscroll-behavior: none;
+        overflow: hidden;
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      /* position:fixed/inset:0 tracks Safari's dynamic toolbar without a dvh
+         reflow dance. The canvas is resized from JS off ResizeObserver. */
+      #stage {
+        position: fixed;
+        inset: 0;
+        touch-action: none;
+      }
+
+      #view {
+        display: block;
+        width: 100%;
+        height: 100%;
+        touch-action: none;
+      }
+
+      /* Zero-size probe: JS reads its computed padding to learn the safe-area
+         insets, which are only available to CSS via env(). */
+      #safe-probe {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 0;
+        height: 0;
+        pointer-events: none;
+        visibility: hidden;
+        padding-top: env(safe-area-inset-top, 0px);
+        padding-right: env(safe-area-inset-right, 0px);
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+        padding-left: env(safe-area-inset-left, 0px);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage"><canvas id="view"></canvas></div>
+    <div id="safe-probe"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
