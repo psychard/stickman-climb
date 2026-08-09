@@ -52,6 +52,9 @@ function makeWatch() {
     movingN: 0,
     settledSum: 0,
     settledN: 0,
+    soloFrames: 0,
+    noFeetFrames: 0,
+    frames: 0,
   };
 }
 
@@ -65,6 +68,13 @@ function observe(watch, fig, stam, moving) {
       watch.settledN++;
     }
   }
+  // Reaching with one hand must not strip you down to a single contact -- that
+  // was the whole body hanging off one hand that isn't even overhead.
+  const contacts = LIMB_IDS.filter((id) => fig.limbs[id].hold);
+  watch.frames++;
+  if (contacts.length <= 1) watch.soloFrames++;
+  if (!contacts.some((id) => fig.limbs[id].kind === 'foot')) watch.noFeetFrames++;
+
   const frame = torsoFrame(fig.hip, fig.chest);
   for (const id of LIMB_IDS) {
     const limb = fig.limbs[id];
@@ -190,6 +200,8 @@ function climb(seed, maxMoves = 400) {
     poseWorst: watch.poseWorst,
     footTension: watch.footTension,
     peels: watch.peels,
+    soloPct: watch.soloFrames / Math.max(1, watch.frames),
+    noFeetPct: watch.noFeetFrames / Math.max(1, watch.frames),
     flipsPerMove: watch.bendFlips / Math.max(1, moves),
   };
 }
@@ -209,7 +221,10 @@ for (const seed of seeds) {
   const poseOk = r.poseWorst < T.POSE_PEEL + 3;
   // joints may legitimately change side, but not constantly
   const jointsOk = r.flipsPerMove < 0.5;
-  const ok = jitterOk && plantOk && feetOk && poseOk && jointsOk;
+  // routine climbing should almost never leave you on a single contact, and
+  // should not spend much time with both feet off the wall
+  const contactsOk = r.soloPct < 0.02 && r.noFeetPct < 0.15;
+  const ok = jitterOk && plantOk && feetOk && poseOk && jointsOk && contactsOk;
   if (!ok) bad++;
   console.log(
     `${ok ? 'PASS' : 'FAIL'} seed ${String(r.seed).padStart(9)}  ` +
@@ -220,13 +235,15 @@ for (const seed of seeds) {
       `pose ${r.poseWorst.toFixed(2)}u  ` +
       `footTension ${r.footTension.toFixed(2)}u  ` +
       `peels ${r.peels}  ` +
+      `solo ${(r.soloPct * 100).toFixed(1)}%  noFeet ${(r.noFeetPct * 100).toFixed(0)}%  ` +
       `flips/move ${r.flipsPerMove.toFixed(2)}  ` +
       `stam min ${r.minStamina.toFixed(2)}  strain move ${r.strainMoving.toFixed(2)} / rest ${r.strainSettled.toFixed(2)}` +
       (jitterOk ? '' : '  <-- OSCILLATING') +
       (plantOk ? '' : '  <-- GRABS FAILING') +
       (feetOk ? '' : '  <-- FEET PULLING') +
       (poseOk ? '' : '  <-- LIMB OUTSIDE CONE') +
-      (jointsOk ? '' : '  <-- JOINTS SNAPPING'),
+      (jointsOk ? '' : '  <-- JOINTS SNAPPING') +
+      (contactsOk ? '' : '  <-- STRIPPED TO ONE CONTACT'),
   );
 }
 console.log(bad === 0 ? '\nSimulated climbs OK.' : `\n${bad}/${seeds.length} runs had problems.`);

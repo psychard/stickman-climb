@@ -78,6 +78,19 @@ export const T = {
   FOOT_PUSH_STIFF: 0.22, // legs pressing the body up off a foothold
   CLAMP_STIFF: 1.0, // hard min/max reach clamps (planted limbs tether here)
   DRAG_PULL: 0.3, // how hard a dragged limb drags the body toward the target
+  DRAG_LIFT: 0.4, // ...scaled down for the upward component; hauling up is work
+  // The lunge needs two thresholds, as fractions of the limb's max reach.
+  // START: don't shift the body for anything the limb can already touch --
+  //   lunging from the *preferred* length meant every reach hauled the body up,
+  //   over-extended both legs and peeled both feet off.
+  // SETTLE: but once committed, pull the target comfortably inside reach rather
+  //   than to the exact boundary, or the stance lands on a knife edge and the
+  //   settle that follows pushes it straight back out of range.
+  // Measured tradeoff (600 sim moves): START 0.90/SETTLE 0.70 gives a 97% plant
+  // rate but peels a foot on 6.5% of moves; START 1.00/SETTLE 0.84 holds ~95%
+  // while dropping that to ~2.5%. Feet staying on is worth the 2%.
+  LUNGE_START: 1.0,
+  LUNGE_SETTLE: 0.84,
 
   // Elasticity in reach: past max the limb keeps moving, but with exponential
   // resistance, asymptotically capped at max + REACH_STRETCH. Tight, on purpose.

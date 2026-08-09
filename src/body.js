@@ -259,7 +259,17 @@ function enforceTorso(state) {
 
 /** One relaxation pass over all constraints. Mutates state.hip / state.chest. */
 function relaxOnce(state, limbs) {
-  // 1. dragged limbs pull the body (the lunge)
+  // 1. dragged limbs pull the body -- the lunge.
+  //
+  //    Only the SHORTFALL past max reach moves the body. Reaching for something
+  //    your arm can already touch must not haul your whole body along: you
+  //    extend the arm, and the body only commits once the arm has run out. Doing
+  //    this from `pref` instead meant almost every reach lifted the body,
+  //    stretched both legs past their length, and peeled both feet off at once.
+  //
+  //    Vertical lunge is damped separately. Leaning sideways is nearly free --
+  //    gravity does it for you -- but pulling yourself upward is muscular work,
+  //    so a hand reaching overhead shouldn't levitate you.
   for (const limb of limbs) {
     if (!limb.drag) continue;
     const a = anchorOf(state.hip, state.chest, limb);
@@ -267,9 +277,10 @@ function relaxOnce(state, limbs) {
     const dx = limb.drag.target.x - a.x;
     const dy = limb.drag.target.y - a.y;
     const d = Math.hypot(dx, dy);
-    if (d > spec.pref && d > 1e-6) {
-      const move = (d - spec.pref) * T.DRAG_PULL;
-      pushAnchor(state, limb, (dx / d) * move, (dy / d) * move);
+    if (d > spec.max * T.LUNGE_START && d > 1e-6) {
+      const move = (d - spec.max * T.LUNGE_SETTLE) * T.DRAG_PULL;
+      const cy = (dy / d) * move;
+      pushAnchor(state, limb, (dx / d) * move, cy < 0 ? cy * T.DRAG_LIFT : cy);
     }
   }
 

@@ -58,6 +58,30 @@ A dragged limb never stretches past max reach. The pointer pulls the *body*, and
 if the body can't get there the grab fails. Visual elasticity past max is capped
 by `REACH_STRETCH` and is cosmetic — `canReach()` is the real gate.
 
+### The lunge needs two thresholds
+
+`LUNGE_START` / `LUNGE_SETTLE`, both fractions of the limb's max reach, and the
+pair of them is load-bearing:
+
+- Lunging from the limb's *preferred* length means **every** reach hauls the body
+  along. Reaching overhead then lifts the body, both legs run past their length,
+  and both feet peel at once — you end up hanging off one hand for no reason the
+  player did anything to deserve. Only lunge for what the limb genuinely can't
+  reach (`LUNGE_START: 1.0`).
+- But pulling only the *shortfall* stops the body the instant the hold sits at
+  exactly max reach, so the stance lands on a knife edge and the settle that
+  follows pushes it straight back out of range. Plant rate fell to ~65% and no
+  amount of stiffness fixed it, because stiffness isn't the bottleneck — the
+  target is. `LUNGE_SETTLE` pulls to comfortably inside reach instead.
+
+`DRAG_LIFT` separately damps the upward component: leaning sideways is nearly
+free, hauling yourself upward is muscular work. A hold far above your max reach
+is therefore genuinely unreachable, which is what the brief asks for.
+
+Reaching in any direction at up to 120% of max reach must leave both feet on the
+wall. `sim` asserts this as `solo` (frames on a single contact, should be 0%) and
+`noFeet` (frames with both feet off, a few percent).
+
 ### Hands hold you on; feet only hold you up
 
 A hand is a tension anchor — hanging off one is the whole point. A foot is a
