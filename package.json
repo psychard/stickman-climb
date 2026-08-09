@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview --host --port 5173",
     "verify": "node tools/verify-wall.mjs",
-    "sim": "node tools/sim-check.mjs"
+    "sim": "node tools/sim-check.mjs",
+    "measure": "node tools/measure.mjs"
   },
   "devDependencies": {
     "vite": "^7.1.3"

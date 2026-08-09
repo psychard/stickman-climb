@@ -164,5 +164,12 @@ a foot was legal anywhere on a ring around the hip, including above the chest.
 - Fatigue is still one global bar, though strain is now computed per limb, so
   per-limb pump (and shaking out one arm) is a small step from here.
 - The generator only checks that stances are *possible*, not that they're good.
-  It produces walls where ~47% of bodyweight sits on the arms on an average
-  stance, which is why rest positions are scarcer than they should be.
+  It produces walls where ~35% of bodyweight sits on the arms on an average
+  stance and never tries to put the feet under the body, which is why rest
+  positions are scarcer than they should be. This is the highest-value piece of
+  work left.
+- No depth axis, decided deliberately. The sim is 2D in the plane of the wall, so
+  keeping your hips in close to the wall — arguably the real biomechanical driver
+  of difficulty — cannot be represented at all, and neither can true
+  barn-dooring. Revisit only if the game feels wrong in a way nothing else
+  explains.

@@ -107,6 +107,15 @@ export const T = {
   GRAB_RADIUS: 42, // how close a pointer must land to pick up a limb
   SNAP_RADIUS: 34, // how close the limb endpoint must be to a hold to plant
   PLANT_TOLERANCE: 1.0, // multiple of max reach still allowed to plant
+  // A touch that never travels this far is a tap, which releases the limb.
+  // Small enough that a tap is deliberate, large enough that a thumb resting on
+  // a limb doesn't start dragging it.
+  TAP_SLOP: 5,
+  FALL_LINGER: 0.85, // seconds watching yourself fall before the retry overlay
+  // How decisive the outboard test must be before a joint may switch bend side.
+  // Near zero the limb is pointing sideways and the test is meaningless, so the
+  // previous side is kept -- otherwise knees snap mid-move.
+  BEND_HYSTERESIS: 0.3,
 
   // ---------------------------------------------------------------- stamina ---
   // Strain is a single 0..~2 scalar built from three signals. Below REST_STRAIN

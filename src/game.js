@@ -2,9 +2,16 @@
  * Game state, camera and the drag interaction.
  *
  * Interaction notes that matter for feel:
- *  - A limb is NOT peeled off its hold the instant you touch it. The grab only
- *    becomes a drag once the pointer travels past TAP_SLOP, so a stray tap or a
- *    thumb resting on the screen can't drop you off the wall.
+ *  - Touching a limb doesn't move it. The grab only becomes a drag once the
+ *    pointer travels past TAP_SLOP, so a thumb resting on a limb can't start
+ *    hauling the body around.
+ *  - A touch that never travels is a TAP, and a tap releases the limb. Planted
+ *    limbs limit how far the body can reach, so this is the player's lever for
+ *    buying extra stretch: drop a trailing foot, then reach.
+ *  - Tap-to-release applies to hands too, not just feet. Uniform is more
+ *    predictable than special-casing, but it does mean a mistimed tap on a hand
+ *    can drop you. Restricting it to feet is a one-line change here if that
+ *    turns out to feel unfair.
  *  - Snapping is tested against the limb's *solved* endpoint, which is already
  *    clamped to max reach. So a hold you can't reach simply can't be taken, no
  *    matter how far past it you drag.
@@ -22,9 +29,6 @@ import {
 } from './body.js';
 import { createStamina, updateStamina } from './stamina.js';
 import { draw, debugButtonRect } from './render.js';
-
-const TAP_SLOP = 5; // world units of travel before a touch becomes a drag
-const FALL_LINGER = 0.85; // seconds of watching yourself fall before the overlay
 
 export function createGame(canvas) {
   const game = {
@@ -107,7 +111,7 @@ export function createGame(canvas) {
       const limb = game.fig.limbs[p.limbId];
 
       if (!p.dragging) {
-        if (Math.hypot(world.x - p.down.x, world.y - p.down.y) < TAP_SLOP) return;
+        if (Math.hypot(world.x - p.down.x, world.y - p.down.y) < T.TAP_SLOP) return;
         p.dragging = true;
         limb.hold = null;
         limb.drag = { pointerId: id, target: { x: world.x, y: world.y } };
@@ -204,7 +208,7 @@ export function update(game, dt) {
     else if (game.stam.value <= 0) beginFall(game, 'PUMPED OUT');
   } else if (game.state === 'falling') {
     game.fallTimer += dt;
-    if (game.fallTimer > FALL_LINGER) game.state = 'fallen';
+    if (game.fallTimer > T.FALL_LINGER) game.state = 'fallen';
   }
 
   // camera follow

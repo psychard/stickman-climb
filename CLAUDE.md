@@ -11,13 +11,40 @@ feel good?** Work that doesn't serve that is out of scope. Explicitly not wanted
 yet: visual polish, art, sound, menus, scoring, progression, seed entry, level
 select, or difficulty tuning beyond rough placeholders.
 
+## Where things stand
+
+Working and verified: draggable limbs with multitouch, reach limits with body
+lunge, anatomical pose limits, geometric load distribution, stamina with rest and
+recovery, falling, scrolling camera, and seeded walls that are climbable by
+construction. Frame cost ~0.3ms of a 16.7ms budget.
+
+Standing decisions, so they don't get relitigated by accident:
+
+| Decision | Status |
+|---|---|
+| **No depth axis.** The sim is 2D *in the wall plane*, so "hips in close to the wall" cannot be represented and true barn-dooring (which rotates out of plane) is not modelled. | Settled — deliberate |
+| **One global stamina bar**, though strain is computed per limb internally. Per-limb pump, and shaking out one arm, is a small step from here. | Deferred |
+| **Holds are a direction-free quality scalar.** No underclings, sidepulls or slopers that only work when pulled a particular way. | Deferred |
+| **Nothing peels off a hold automatically.** Planted limbs limit reach; the player taps a limb to release it. | Settled — replaced auto-peel |
+| **Tap-to-release applies to hands too**, not only feet. | Settled, but flagged: a mistimed tap on a hand can drop you |
+
+The brief in `docs/BRIEF.md` has been revised where playtesting proved it wrong;
+its Revisions section records what changed and why.
+
 ## Commands
 
 ```bash
 npm run dev      # Vite dev server on :5173, bound to 0.0.0.0
 npm run verify   # prove generated walls are climbable (static solve)
-npm run sim      # headless auto-climber (live solver): plant rate, jitter, stamina
+npm run sim      # headless auto-climber (live solver): plant rate, jitter, invariants
+npm run measure  # what the biophysics model actually does, in numbers
 ```
+
+`verify` and `sim` answer "is it broken?"; `measure` answers "what does it do?".
+Several constants in `tuning.js` cite measured numbers — **if you change a strain
+term, a load rule or a reach constant, run `measure` and update whatever you
+invalidated**, here and in the tuning comments. The numbers below were last
+refreshed from it.
 
 Testing on a phone is via `ngrok http 5173`. `vite.config.js` sets
 `server.allowedHosts` for ngrok domains — Vite rejects unknown `Host` headers, so
@@ -43,11 +70,11 @@ the other modules; they get adjusted constantly and need to be in one place.
 
 The body is two points — `hip` and `chest` — held apart by a fixed torso length.
 Shoulder and hip sockets are derived from those two, so torso lean and rotation
-fall out for free. Each substep relaxes a small constraint set in this order
-(Gauss-Seidel: later constraints win):
+fall out for free.
 
 Gravity **and the drag lunge** are applied once per substep as external
-displacements, then the constraints are relaxed:
+displacements. Then the constraints are relaxed, in this order (Gauss-Seidel:
+later constraints win):
 
 1. planted feet **push** the body up off their hold (legs are struts, one-sided)
 2. planted limbs clamp the body inside their reach envelope
@@ -156,12 +183,16 @@ dot passes through zero, so knees snap between IK solutions mid-move.
 
 ## Stamina and load
 
-Strain is one scalar built from four terms, and `REST_STRAIN` is the threshold
-between draining and recovering — the whole pacing mechanic is that one number.
-It's calibrated against the measured spread of real route stances (p25 ≈ 0.32,
-median ≈ 0.41, p90 ≈ 0.73) so roughly the best quarter of positions offer a rest.
-**Re-measure that spread before changing it**; the idealised stances in a test
-harness score far lower than anything the generator actually produces.
+Strain is one scalar built from four terms — hold quality, flexion, balance, and
+arm load — and `REST_STRAIN` is the threshold between draining and recovering.
+The whole pacing mechanic is that one number.
+
+It's calibrated against the measured spread of **real route stances** (currently
+p25 ≈ 0.28, median ≈ 0.37, p90 ≈ 0.69), so about the best quarter recover.
+`npm run measure` prints that spread and the resulting recover fraction. Always
+calibrate against it rather than against idealised stances: a clean test-harness
+stance scores ~0.12, far below anything the generator actually produces, and
+tuning to that makes rest impossible on a real wall.
 
 Load distribution is the part that makes technique matter. Each contact's share
 of bodyweight comes from how well it opposes gravity and how near the COM sits
@@ -200,16 +231,27 @@ Both checks matter and they check different things:
 - `npm run sim` — replays those same routes through the live per-frame solver.
   Catches oscillation, failed grabs, and dynamic/static mismatch.
 
-Expect ~96–98% per-move plant rate from `sim`. It drags for a fixed 0.18s and
+Expect ~92–96% per-move plant rate from `sim`. It drags for a fixed 0.18s and
 releases blind; a human holds until the target ring highlights, so real success
-is higher. A large drop means something regressed. `sim` also asserts the
-anatomical invariants — feet never loaded in tension past the peel slack, limbs
-inside their cones, joints not snapping sides — so those can't silently rot.
+is higher. A large drop means something regressed.
 
-**Known gap:** the generator only checks stances are *possible*, not that they're
-good. It averages ~47% of bodyweight on the arms across a route, which is why
-rests are scarcer than they should be. Teaching it to prefer stances with the
-feet under the body is the obvious next step.
+`sim` also asserts the anatomical invariants so they can't silently rot: nothing
+peels (`peels` 0), you're never reduced to one contact (`solo` 0%), never with
+both feet off (`noFeet` 0%), legs aren't left stretched once settled, limbs stay
+inside their cones, and joints don't snap sides.
+
+One thing to know when reading `sim`: on a missed grab it force-plants the
+intended hold to resync to the route, otherwise a single marginal failure
+cascades and every later target is measured from the wrong place. Those synthetic
+stances are excluded from the anatomical invariants (`watch.synthetic`) — the
+figure never actually achieved them, so asserting on them measures the harness.
+
+**Known gap — the obvious next piece of work.** The generator only checks stances
+are *possible*, never that they're good. It averages ~35% of bodyweight on the
+arms across a route, and it never tries to put the feet under the body, which is
+why rests are scarcer than they should be and why `REST_STRAIN` has to sit so
+high. Teaching `stanceFeasible` to *prefer* low-arm-load stances (rather than
+merely accept any feasible one) is the highest-value change available.
 
 ## Coordinates
 
@@ -233,8 +275,11 @@ area insets are read from the `#safe-probe` element, since `env()` is CSS-only.
 
 `window.__game` is exposed in dev — inspect `__game.fig.hip`, `__game.stam.parts`,
 or set `__game.debug = true`. The `dbg` button (or `D`) shows the strain
-breakdown, per-frame update/render cost, and the centre of mass against its base
-of support. `R` restarts.
+breakdown, the per-limb load shares, per-frame update/render cost, and the centre
+of mass. `R` restarts.
+
+Frame cost is ~0.3ms of a 16.7ms budget, so if the browser reports a low fps it's
+throttling, not the game — check `msUpdate` / `msRender` before optimising.
 
 Note that `requestAnimationFrame` gets throttled when the browser pane isn't
 focused, which makes rAF-driven browser automation flaky. Prefer `npm run sim`

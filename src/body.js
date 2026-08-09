@@ -5,17 +5,24 @@
  * torso length. Everything else (shoulder positions, hip sockets) is derived
  * from those two points, so the torso leaning and rotating falls out for free.
  *
- * Each frame we integrate gravity onto those two points, then relax a small set
- * of positional constraints (Gauss-Seidel, so later constraints win):
+ * Each substep applies the external inputs ONCE -- gravity sag, then the drag
+ * lunge -- and then relaxes a small set of positional constraints (Gauss-Seidel,
+ * so later constraints win):
  *
- *   1. dragged limbs PULL the body toward the pointer (soft -- this is the lunge)
- *   2. planted feet PUSH the body up off their hold (legs are struts)
- *   3. planted limbs HARD CLAMP the body inside their reach envelope (tethers)
+ *   1. planted feet PUSH the body up off their hold (legs are struts, one-sided)
+ *   2. planted limbs CLAMP the body inside their reach envelope
+ *   3. POSE CONES keep each limb anatomically plausible against the torso
  *   4. the torso keeps its length
  *   5. a weak bias keeps the chest above the hip
  *
+ * ...and finally projectReach() enforces reach + pose + torso strictly, so the
+ * envelope gets the last word. See CLAUDE.md for why the drag must not live
+ * inside the relaxation loop, and why reach and pose must be projected together.
+ *
  * A dragged limb never stretches past its max reach: the pointer pulls the body,
- * and if the body can't get there the grab just fails.
+ * and if the body can't get there the grab just fails. Nothing is ever peeled
+ * off a hold automatically -- a planted limb limits you, and the player taps it
+ * to let go.
  */
 
 import { T, clamp } from './tuning.js';
@@ -582,9 +589,6 @@ export function stanceFeasible(pts) {
 // two-bone IK, for drawing elbows and knees
 // --------------------------------------------------------------------------
 
-/** Below this the outboard test is too ambiguous to act on; keep the last bend. */
-const BEND_HYSTERESIS = 0.3;
-
 /**
  * Joint position for a two-bone limb from `a` to `b`, with the elbow or knee
  * flared outboard the way a climber's does.
@@ -618,7 +622,7 @@ export function ikJoint(a, b, boneLen, frame, limb) {
   // >0 means the +perp solution is the outboard one for this limb's side
   const outboard = (px * frame.rx + py * frame.ry) * limb.side;
   if (limb.bend === undefined) limb.bend = outboard >= 0 ? 1 : -1;
-  else if (Math.abs(outboard) > BEND_HYSTERESIS) limb.bend = outboard > 0 ? 1 : -1;
+  else if (Math.abs(outboard) > T.BEND_HYSTERESIS) limb.bend = outboard > 0 ? 1 : -1;
 
   return {
     x: a.x + dx * half + px * h * limb.bend,
