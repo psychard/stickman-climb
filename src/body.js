@@ -53,6 +53,7 @@ export function createFigure(stance) {
       hold: null, // the hold object this limb is planted on, or null
       pos: { x: 0, y: 0 }, // rendered endpoint
       drag: null, // { pointerId, target:{x,y} } while being dragged
+      bend: undefined, // sticky elbow/knee side, owned by ikJoint
     };
   }
   resetToStance(fig, stance);
@@ -118,6 +119,94 @@ export function centerOfMass(fig) {
 export function plantedLimbs(fig) {
   return LIMB_IDS.map((id) => fig.limbs[id]).filter((l) => l.hold && !l.drag);
 }
+
+// --------------------------------------------------------------------------
+// anatomical pose limits
+// --------------------------------------------------------------------------
+
+/**
+ * Decompose a socket->endpoint offset into the torso frame.
+ *
+ * `up` is positive toward the head, `out` is positive on the limb's own side.
+ * A limb is a pure distance constraint otherwise, which is why without this a
+ * foot is legal anywhere on a ring around the hip -- including above the chest.
+ */
+export function limbPose(hip, chest, limb, pt) {
+  const f = torsoFrame(hip, chest);
+  const a = anchorOf(hip, chest, limb);
+  const vx = pt.x - a.x;
+  const vy = pt.y - a.y;
+  return {
+    // f.u points hip->chest, so a positive dot means "toward the head"
+    up: vx * f.ux + vy * f.uy,
+    out: (vx * f.rx + vy * f.ry) * limb.side,
+  };
+}
+
+/**
+ * Project a point into the limb's anatomical cone. Used on the dragged endpoint
+ * so you cannot even visually put a foot above your own chest.
+ * (u, r) is orthonormal, so the offset rebuilds as up*u + out*side*r.
+ */
+export function clampToPose(hip, chest, limb, pt) {
+  const f = torsoFrame(hip, chest);
+  const a = anchorOf(hip, chest, limb);
+  const P = T.POSE;
+  let { up, out } = limbPose(hip, chest, limb, pt);
+  if (limb.kind === 'foot') up = Math.min(up, P.FOOT_RISE);
+  else up = Math.max(up, -P.HAND_DROP);
+  out = Math.max(out, -(limb.kind === 'foot' ? P.FOOT_CROSS : P.HAND_CROSS));
+  const o = out * limb.side;
+  return { x: a.x + f.ux * up + f.rx * o, y: a.y + f.uy * up + f.ry * o };
+}
+
+/** World-space anchor correction that brings a limb back inside its cone. */
+function poseCorrection(state, limb, pt) {
+  const f = torsoFrame(state.hip, state.chest);
+  const P = T.POSE;
+  const { up, out } = limbPose(state.hip, state.chest, limb, pt);
+  let cx = 0;
+  let cy = 0;
+
+  // Moving the anchor along +u reduces `up` by the same amount, and along
+  // -r*side increases `out`.
+  if (limb.kind === 'foot') {
+    const over = up - P.FOOT_RISE; // foot climbing above hip level
+    if (over > 0) {
+      cx += f.ux * over;
+      cy += f.uy * over;
+    }
+  } else {
+    const under = -up - P.HAND_DROP; // hand dropped below hip level
+    if (under > 0) {
+      cx -= f.ux * under;
+      cy -= f.uy * under;
+    }
+  }
+  const cross = -out - (limb.kind === 'foot' ? P.FOOT_CROSS : P.HAND_CROSS);
+  if (cross > 0) {
+    cx -= f.rx * limb.side * cross;
+    cy -= f.ry * limb.side * cross;
+  }
+  return { x: cx, y: cy };
+}
+
+/** How far outside its anatomical cone a limb pose is, in world units (0 = fine). */
+export function poseViolation(hip, chest, limb, pt) {
+  const { up, out } = limbPose(hip, chest, limb, pt);
+  const P = T.POSE;
+  const riseCap = limb.kind === 'foot' ? P.FOOT_RISE : Infinity;
+  const dropCap = limb.kind === 'foot' ? Infinity : P.HAND_DROP;
+  const crossCap = limb.kind === 'foot' ? P.FOOT_CROSS : P.HAND_CROSS;
+  return Math.max(
+    0,
+    up - riseCap, // foot lifted above hip level / hand above nothing
+    -up - dropCap, // hand dropped below hip level
+    -out - crossCap, // limb reaching too far across the body
+  );
+}
+
+export const poseOk = (hip, chest, limb, pt) => poseViolation(hip, chest, limb, pt) < 1;
 
 /** Where an unplanted limb hangs when nothing is holding it. */
 function dangleTarget(fig, limb) {
@@ -199,7 +288,13 @@ function relaxOnce(state, limbs) {
     }
   }
 
-  // 3. planted limbs hard-clamp the body inside their reach envelope
+  // 3. planted limbs clamp the body inside their reach envelope.
+  //
+  //    Hands clamp BOTH ways: they tether you in tension (this is what hanging
+  //    is) and stop the body collapsing into the hold. Feet only clamp the
+  //    compression side -- a foot on a foothold cannot hold you down. If the
+  //    body gets further away than the leg is long the foot comes off, which
+  //    stepFigure() handles; here it simply stops resisting.
   for (const limb of limbs) {
     if (!limb.hold || limb.drag) continue;
     const a = anchorOf(state.hip, state.chest, limb);
@@ -208,15 +303,27 @@ function relaxOnce(state, limbs) {
     const dy = limb.hold.y - a.y;
     const d = Math.hypot(dx, dy) || 1e-6;
     let move = 0;
-    if (d > spec.max) move = (d - spec.max) * T.CLAMP_STIFF;
+    if (d > spec.max && limb.kind === 'hand') move = (d - spec.max) * T.CLAMP_STIFF;
     else if (d < spec.min) move = (d - spec.min) * T.CLAMP_STIFF;
     if (move !== 0) pushAnchor(state, limb, (dx / d) * move, (dy / d) * move);
   }
 
-  // 4. torso keeps its length
+  // 4. anatomical pose limits -- keep each limb inside its cone relative to the
+  //    torso, so feet can't end up above the chest and limbs can't wrap across
+  //    the body. Acts on the body, since the hold itself is fixed.
+  for (const limb of limbs) {
+    const pt = limb.drag ? limb.drag.target : limb.hold;
+    if (!pt) continue;
+    const c = poseCorrection(state, limb, pt);
+    if (c.x !== 0 || c.y !== 0) {
+      pushAnchor(state, limb, c.x * T.POSE_STIFF, c.y * T.POSE_STIFF);
+    }
+  }
+
+  // 5. torso keeps its length
   enforceTorso(state);
 
-  // 5. weak upright bias so the figure reads as a person, not a ragdoll
+  // 6. weak upright bias so the figure reads as a person, not a ragdoll
   {
     const tx = state.hip.x;
     const ty = state.hip.y - T.TORSO_LEN;
@@ -271,7 +378,30 @@ export function stepFigure(fig, dt) {
   fig.chestV.x = (fig.chest.x - prevChest.x) * f;
   fig.chestV.y = (fig.chest.y - prevChest.y) * f;
 
+  peelOverextendedFeet(fig, limbs);
   placeEndpoints(fig, limbs);
+}
+
+/**
+ * Feet are conditional contacts and drop when either condition fails.
+ *
+ * A foot can push but not pull, so once the hip is further from the foothold
+ * than the leg is long there is nothing holding it on. And a foot dragged well
+ * outside its anatomical cone -- up above the hip, or wrapped across the body --
+ * has no purchase either. Hands are deliberately exempt: a hand *is* a tension
+ * anchor, and hanging is the whole point of one.
+ */
+function peelOverextendedFeet(fig, limbs) {
+  for (const limb of limbs) {
+    if (limb.kind !== 'foot' || !limb.hold || limb.drag) continue;
+    const a = anchorOf(fig.hip, fig.chest, limb);
+    const d = Math.hypot(limb.hold.x - a.x, limb.hold.y - a.y);
+    if (d > T.LEG.max + T.FOOT_PEEL_SLACK) {
+      limb.hold = null;
+      continue;
+    }
+    if (poseViolation(fig.hip, fig.chest, limb, limb.hold) > T.POSE_PEEL) limb.hold = null;
+  }
 }
 
 /** Position the visible limb endpoints from the solved body. */
@@ -281,10 +411,12 @@ function placeEndpoints(fig, limbs) {
       limb.pos.x = limb.hold.x;
       limb.pos.y = limb.hold.y;
     } else if (limb.drag) {
+      // clamp into the anatomical cone first, then to reach
+      const goal = clampToPose(fig.hip, fig.chest, limb, limb.drag.target);
       const a = anchorOf(fig.hip, fig.chest, limb);
       const spec = specFor(limb.kind);
-      const dx = limb.drag.target.x - a.x;
-      const dy = limb.drag.target.y - a.y;
+      const dx = goal.x - a.x;
+      const dy = goal.y - a.y;
       const d = Math.hypot(dx, dy) || 1e-6;
       const e = softReach(d, spec.max);
       limb.pos.x = a.x + (dx / d) * e;
@@ -305,12 +437,18 @@ export function extensionOf(fig, limb) {
   return Math.hypot(p.x - a.x, p.y - a.y) / spec.max;
 }
 
-/** Can this limb actually reach `pt` from where the body currently is? */
+/**
+ * Can this limb actually take `pt` from where the body currently is? Both the
+ * reach envelope and the anatomical cone have to allow it -- a foothold level
+ * with your shoulder is in range of the leg but is not a position a body gets
+ * into, so it isn't offered.
+ */
 export function canReach(fig, limb, pt) {
   const a = anchorOf(fig.hip, fig.chest, limb);
   const spec = specFor(limb.kind);
   const d = Math.hypot(pt.x - a.x, pt.y - a.y);
-  return d <= spec.max * T.PLANT_TOLERANCE && d >= spec.min * 0.55;
+  if (d > spec.max * T.PLANT_TOLERANCE || d < spec.min * 0.55) return false;
+  return poseOk(fig.hip, fig.chest, limb, pt);
 }
 
 // --------------------------------------------------------------------------
@@ -364,7 +502,12 @@ export function solveStatic(pts, iters = T.GEN_SOLVE_ITERS) {
     const a = anchorOf(state.hip, state.chest, limb);
     const spec = specFor(limb.kind);
     const d = Math.hypot(limb.hold.x - a.x, limb.hold.y - a.y);
-    violation = Math.max(violation, d - spec.max, spec.min - d);
+    violation = Math.max(
+      violation,
+      d - spec.max, // includes feet: a stance needing a foot in tension is out
+      spec.min - d,
+      poseViolation(state.hip, state.chest, limb, limb.hold),
+    );
   }
   return { hip: state.hip, chest: state.chest, violation };
 }
@@ -390,27 +533,46 @@ export function stanceFeasible(pts) {
 // two-bone IK, for drawing elbows and knees
 // --------------------------------------------------------------------------
 
+/** Below this the outboard test is too ambiguous to act on; keep the last bend. */
+const BEND_HYSTERESIS = 0.3;
+
 /**
- * Joint position for a two-bone limb from `a` to `b`. Picks whichever of the
- * two solutions bends away from the body's midline, so elbows and knees flare
- * outward the way a climber's do.
+ * Joint position for a two-bone limb from `a` to `b`, with the elbow or knee
+ * flared outboard the way a climber's does.
+ *
+ * Two things here are easy to get wrong and both looked awful:
+ *
+ * Normalise by the TRUE distance, not a clamped one. Clamping first and then
+ * dividing leaves a direction vector longer than unit whenever the limb is at
+ * or past full extension, which puts the joint in the wrong place exactly when
+ * you're reaching hardest. With half = dist/2 the degenerate case handles
+ * itself: past full extension the square root goes to zero and the joint sits
+ * on the midpoint of a straight limb.
+ *
+ * And the bend side has to be sticky. Choosing it by a dot product against the
+ * torso's right vector passes through zero whenever the limb points sideways,
+ * so the knee snaps between the two IK solutions mid-move. `limb.bend` persists
+ * the choice and only changes when the preference is unambiguous.
  */
-export function ikJoint(a, b, boneLen, frame, side) {
+export function ikJoint(a, b, boneLen, frame, limb) {
   let dx = b.x - a.x;
   let dy = b.y - a.y;
-  let d = Math.hypot(dx, dy);
-  const reach = boneLen * 2;
-  d = clamp(d, 1e-3, reach * 0.999);
-  dx /= d || 1;
-  dy /= d || 1;
-  const half = d / 2;
+  const dist = Math.hypot(dx, dy) || 1e-6;
+  dx /= dist;
+  dy /= dist;
+
+  const half = dist / 2;
   const h = Math.sqrt(Math.max(0, boneLen * boneLen - half * half));
   const px = -dy;
   const py = dx;
-  // choose the side that lies outboard along the torso's right vector
-  const sign = px * frame.rx + py * frame.ry > 0 ? side : -side;
+
+  // >0 means the +perp solution is the outboard one for this limb's side
+  const outboard = (px * frame.rx + py * frame.ry) * limb.side;
+  if (limb.bend === undefined) limb.bend = outboard >= 0 ? 1 : -1;
+  else if (Math.abs(outboard) > BEND_HYSTERESIS) limb.bend = outboard > 0 ? 1 : -1;
+
   return {
-    x: a.x + dx * half + px * h * sign,
-    y: a.y + dy * half + py * h * sign,
+    x: a.x + dx * half + px * h * limb.bend,
+    y: a.y + dy * half + py * h * limb.bend,
   };
 }

@@ -152,7 +152,7 @@ function drawFigure(ctx, fig, sx, sy, s, debug, viewH) {
     const limb = fig.limbs[id];
     const a = anchorOf(fig.hip, fig.chest, limb);
     const spec = specFor(limb.kind);
-    const joint = ikJoint(a, limb.pos, spec.bone, frame, limb.side);
+    const joint = ikJoint(a, limb.pos, spec.bone, frame, limb);
     const color = limb.drag
       ? T.COL.dragging
       : limb.hold
@@ -263,8 +263,10 @@ function drawHud(ctx, game) {
     const lines = [
       `strain ${stam.smooth.toFixed(2)}  (rest ${T.REST_STRAIN})`,
       `  hold ${(T.W_HOLD * stam.parts.hold).toFixed(3)}`,
-      `  ext  ${(T.W_EXT * stam.parts.ext).toFixed(3)}`,
-      `  com  ${(T.W_COM * stam.parts.com).toFixed(3)}`,
+      `  flex ${(T.W_FLEX * stam.parts.flex).toFixed(3)}`,
+      `  balnc ${(T.W_BALANCE * stam.parts.balance).toFixed(3)}`,
+      `  arms ${(T.W_ARMLOAD * stam.parts.armLoad).toFixed(3)}`,
+      `load ${['LH', 'RH', 'LF', 'RF'].map((id) => `${id}:${((stam.load[id] || 0) * 100).toFixed(0)}`).join(' ')}`,
       `planted ${stam.planted}   stamina ${stam.value.toFixed(2)}`,
       `fps ${game.fps.toFixed(0)}  upd ${game.msUpdate.toFixed(2)}ms  ren ${game.msRender.toFixed(2)}ms`,
       `holds ${wall.stats.total} (${wall.stats.route} route)`,

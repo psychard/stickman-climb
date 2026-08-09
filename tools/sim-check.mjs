@@ -13,7 +13,17 @@
 
 import { T } from '../src/tuning.js';
 import { generateWall, holdsNear } from '../src/wall.js';
-import { createFigure, stepFigure, canReach } from '../src/body.js';
+import {
+  createFigure,
+  stepFigure,
+  canReach,
+  anchorOf,
+  specFor,
+  poseViolation,
+  torsoFrame,
+  ikJoint,
+  LIMB_IDS,
+} from '../src/body.js';
 import { createStamina, updateStamina } from '../src/stamina.js';
 
 const DRAG_STEPS = 22; // substeps spent moving a limb to its target
@@ -25,6 +35,55 @@ const step = (fig, stam, n) => {
     updateStamina(stam, fig, T.SUB_DT);
   }
 };
+
+/**
+ * Anatomical invariants, sampled every substep. These are the three things that
+ * looked wrong on the phone, so they get asserted rather than eyeballed:
+ * feet that pull, limbs outside their cone, and joints that snap sides.
+ */
+function makeWatch() {
+  return {
+    poseWorst: 0,
+    footTension: 0,
+    bendFlips: 0,
+    peels: 0,
+    prevBend: {},
+    movingSum: 0,
+    movingN: 0,
+    settledSum: 0,
+    settledN: 0,
+  };
+}
+
+function observe(watch, fig, stam, moving) {
+  if (stam) {
+    if (moving) {
+      watch.movingSum += stam.strain;
+      watch.movingN++;
+    } else {
+      watch.settledSum += stam.strain;
+      watch.settledN++;
+    }
+  }
+  const frame = torsoFrame(fig.hip, fig.chest);
+  for (const id of LIMB_IDS) {
+    const limb = fig.limbs[id];
+    const pt = limb.hold || (limb.drag ? limb.pos : null);
+    if (pt) {
+      watch.poseWorst = Math.max(watch.poseWorst, poseViolation(fig.hip, fig.chest, limb, pt));
+    }
+    if (limb.hold && limb.kind === 'foot') {
+      const a = anchorOf(fig.hip, fig.chest, limb);
+      const d = Math.hypot(limb.hold.x - a.x, limb.hold.y - a.y);
+      watch.footTension = Math.max(watch.footTension, d - specFor(limb.kind).max);
+    }
+    // exercise the IK the renderer would run, and watch the bend side
+    const a = anchorOf(fig.hip, fig.chest, limb);
+    ikJoint(a, limb.pos, specFor(limb.kind).bone, frame, limb);
+    if (watch.prevBend[id] !== undefined && watch.prevBend[id] !== limb.bend) watch.bendFlips++;
+    watch.prevBend[id] = limb.bend;
+  }
+}
 
 /** Total hip travel over `n` substeps with no input -- should be ~0 at rest. */
 function measureJitter(fig, stam, n = 120) {
@@ -41,9 +100,10 @@ function measureJitter(fig, stam, n = 120) {
 
 
 /** Drag `limb` to `target` the way a player would, then try to plant. */
-function attemptMove(fig, stam, wall, limb, target) {
+function attemptMove(fig, stam, wall, limb, target, watch) {
   const from = { x: limb.pos.x, y: limb.pos.y };
   const previous = limb.hold;
+  const footHoldsBefore = LIMB_IDS.filter((id) => fig.limbs[id].kind === 'foot' && fig.limbs[id].hold);
 
   limb.hold = null;
   limb.drag = { pointerId: 0, target: { ...from } };
@@ -53,8 +113,14 @@ function attemptMove(fig, stam, wall, limb, target) {
     limb.drag.target.y = from.y + (target.y - from.y) * t;
     stepFigure(fig, T.SUB_DT);
     updateStamina(stam, fig, T.SUB_DT);
+    observe(watch, fig, stam, true);
   }
   limb.drag = null;
+
+  // any foot that came off while we were moving got peeled by over-extension
+  for (const other of footHoldsBefore) {
+    if (other !== limb.id && !fig.limbs[other].hold) watch.peels++;
+  }
 
   for (const hold of holdsNear(wall, limb.pos, T.SNAP_RADIUS)) {
     if (canReach(fig, limb, hold)) {
@@ -69,7 +135,11 @@ function attemptMove(fig, stam, wall, limb, target) {
   // We want the per-move failure rate, not the length of the first cascade.
   if (!ok) limb.hold = target;
   void previous;
-  step(fig, stam, SETTLE_STEPS);
+  for (let i = 0; i < SETTLE_STEPS; i++) {
+    stepFigure(fig, T.SUB_DT);
+    updateStamina(stam, fig, T.SUB_DT);
+    observe(watch, fig, stam, false);
+  }
   return ok;
 }
 
@@ -90,31 +160,37 @@ function climb(seed, maxMoves = 400) {
   const restJitter = measureJitter(fig, stam);
 
   const route = wall.holds.filter((h) => h.route).slice(4);
+  const watch = makeWatch();
   let planted = 0;
   let missed = 0;
   let minStamina = 1;
-  let maxStrain = 0;
 
   for (const target of route.slice(0, maxMoves)) {
     const limb = fig.limbs[target.limb];
-    if (attemptMove(fig, stam, wall, limb, target)) planted++;
+    if (attemptMove(fig, stam, wall, limb, target, watch)) planted++;
     else missed++;
 
     minStamina = Math.min(minStamina, stam.value);
-    maxStrain = Math.max(maxStrain, stam.smooth);
     if (stam.value <= 0) break;
   }
 
+  const moves = planted + missed;
   return {
     seed,
     height: -fig.hip.y,
     planted,
     missed,
-    plantRate: planted / Math.max(1, planted + missed),
+    plantRate: planted / Math.max(1, moves),
     restJitter,
     minStamina,
-    maxStrain,
-    finalStamina: stam.value,
+    // strain while a limb is moving vs settled on a stance -- the gap between
+    // these and REST_STRAIN is what decides whether resting is achievable
+    strainMoving: watch.movingSum / Math.max(1, watch.movingN),
+    strainSettled: watch.settledSum / Math.max(1, watch.settledN),
+    poseWorst: watch.poseWorst,
+    footTension: watch.footTension,
+    peels: watch.peels,
+    flipsPerMove: watch.bendFlips / Math.max(1, moves),
   };
 }
 
@@ -126,17 +202,31 @@ for (const seed of seeds) {
   // oscillating, and that is exactly the "crazy spring" failure mode.
   const jitterOk = r.restJitter < 1.0;
   const plantOk = r.plantRate > 0.9;
-  if (!jitterOk || !plantOk) bad++;
+  // a planted foot must never be loaded in tension beyond its peel slack
+  const feetOk = r.footTension <= T.FOOT_PEEL_SLACK + 0.5;
+  // limbs must stay inside their anatomical cone; feet peel past POSE_PEEL, so
+  // that plus a substep of overshoot is the most we should ever observe
+  const poseOk = r.poseWorst < T.POSE_PEEL + 3;
+  // joints may legitimately change side, but not constantly
+  const jointsOk = r.flipsPerMove < 0.5;
+  const ok = jitterOk && plantOk && feetOk && poseOk && jointsOk;
+  if (!ok) bad++;
   console.log(
-    `${jitterOk && plantOk ? 'PASS' : 'FAIL'} seed ${String(r.seed).padStart(9)}  ` +
+    `${ok ? 'PASS' : 'FAIL'} seed ${String(r.seed).padStart(9)}  ` +
       `climbed ${r.height.toFixed(0).padStart(5)}u  ` +
       `moves ${String(r.planted).padStart(3)}ok/${String(r.missed).padStart(2)}miss ` +
       `(${(r.plantRate * 100).toFixed(0)}%)  ` +
-      `restJitter ${r.restJitter.toFixed(3)}u  ` +
-      `stamina min ${r.minStamina.toFixed(2)} end ${r.finalStamina.toFixed(2)}  ` +
-      `peakStrain ${r.maxStrain.toFixed(2)}` +
+      `jitter ${r.restJitter.toFixed(2)}u  ` +
+      `pose ${r.poseWorst.toFixed(2)}u  ` +
+      `footTension ${r.footTension.toFixed(2)}u  ` +
+      `peels ${r.peels}  ` +
+      `flips/move ${r.flipsPerMove.toFixed(2)}  ` +
+      `stam min ${r.minStamina.toFixed(2)}  strain move ${r.strainMoving.toFixed(2)} / rest ${r.strainSettled.toFixed(2)}` +
       (jitterOk ? '' : '  <-- OSCILLATING') +
-      (plantOk ? '' : '  <-- GRABS FAILING'),
+      (plantOk ? '' : '  <-- GRABS FAILING') +
+      (feetOk ? '' : '  <-- FEET PULLING') +
+      (poseOk ? '' : '  <-- LIMB OUTSIDE CONE') +
+      (jointsOk ? '' : '  <-- JOINTS SNAPPING'),
   );
 }
 console.log(bad === 0 ? '\nSimulated climbs OK.' : `\n${bad}/${seeds.length} runs had problems.`);

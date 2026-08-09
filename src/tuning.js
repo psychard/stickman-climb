@@ -29,6 +29,33 @@ export const T = {
   ARM: { max: 68, pref: 50, min: 22, bone: 34 },
   LEG: { max: 80, pref: 60, min: 26, bone: 40 },
 
+  // Anatomical pose limits, expressed in the torso frame: `up` runs hip->chest,
+  // `out` is sideways on the limb's own side. Without these a limb is legal
+  // anywhere on a ring around its socket, so you can plant a foot above your own
+  // chest. Values are world units of the socket->endpoint offset.
+  POSE: {
+    // A foot can come up to roughly hip level on a high step, no further.
+    FOOT_RISE: 14,
+    // ...and can flag across the body, but not wrap around it.
+    FOOT_CROSS: 28,
+    // Hands work from overhead down to about hip level (pressing out a mantel).
+    HAND_DROP: 70,
+    // Cross-body reaching is real, but bounded.
+    HAND_CROSS: 34,
+  },
+  POSE_STIFF: 0.7, // how hard the solver pushes a limb back inside its cone
+
+  // Feet are conditional contacts: they're held on by compression and by being
+  // somewhere a leg can actually push from. Both failure modes drop the foot.
+  //
+  // A foot resists compression but cannot hold you in tension, so past this much
+  // over-extension it comes off. Over-reaching with your feet is a risk, not a
+  // free anchor.
+  FOOT_PEEL_SLACK: 6,
+  // ...and a foot dragged this far outside its anatomical cone -- up above the
+  // hip, or wrapped across the body -- has no purchase left either.
+  POSE_PEEL: 10,
+
   // ---------------------------------------------------------------- solver ---
   SUB_DT: 1 / 120, // fixed physics timestep
   MAX_SUBSTEPS: 5,
@@ -67,20 +94,51 @@ export const T = {
   // Strain is a single 0..~2 scalar built from three signals. Below REST_STRAIN
   // you recover; above it you drain. That threshold is the whole pacing knob.
   W_HOLD: 0.55,
-  W_EXT: 0.3,
-  W_COM: 0.45,
-  REST_STRAIN: 0.22,
+  W_FLEX: 0.4,
+  W_BALANCE: 0.45,
+  W_ARMLOAD: 0.45, // cost of simply having weight on your arms
+  // Calibrated against the measured spread of real route stances, which runs
+  // p25 0.32 / median 0.41 / p90 0.73. Sitting just under the p25 means roughly
+  // the best quarter of positions on the wall offer a rest, so you have to hunt
+  // for them. Re-measure with tools/ if the strain terms change.
+  REST_STRAIN: 0.3,
 
   DRAIN_RATE: 0.16, // stamina/sec per unit of net strain
-  RECOVER_RATE: 0.55, // stamina/sec per unit of net (negative) strain
+  RECOVER_RATE: 0.5, // stamina/sec per unit of net (negative) strain
   STAMINA_SMOOTH: 6, // low-pass on strain so it doesn't flicker while dragging
 
   HOLD_EXP: 1.4, // curve on (1 - quality); higher = bad holds bite harder
-  EXT_FREE: 0.6, // fraction of max reach that costs nothing
-  EXT_EXP: 1.5,
-  FOOT_LOAD: 0.55, // share of bodyweight a foot takes vs a hand (1.0)
+
+  // FLEXION, not extension, is what costs you. A straight arm hangs off bone and
+  // connective tissue and is nearly free; the bent, locked-off arm is what
+  // burns. Legs are the same shape: a straight leg is cheap, a deep high step is
+  // brutal. Cost runs from 0 at `straight` to 1 at `folded`, as a fraction of
+  // max reach. (This inverts the brief's original extension rule -- see the
+  // revision note in docs/BRIEF.md.)
+  FLEX: {
+    ARM: { straight: 0.92, folded: 0.42 },
+    LEG: { straight: 0.9, folded: 0.45 },
+  },
+  FLEX_EXP: 1.6,
+
   FOOT_STRAIN_MULT: 0.4, // legs are much stronger than arms
-  COM_SPAN_SCALE: 55, // world units of COM-outside-support == 1.0 strain
+
+  // Load distribution. Each contact's share of bodyweight comes from how well it
+  // opposes gravity and how close the centre of mass sits to it, rather than
+  // from a fixed per-limb-type constant. This is what makes moving your hips
+  // over your feet actually unload your arms.
+  LOAD_FALLOFF: 70, // world units; COM this far from a contact halves its share
+  LOAD_FLOOR: 0.05, // a contact always carries at least a little
+  LOAD_STAND_SPAN: 60, // a foot this far below the COM counts as fully stood-on
+  HAND_HANG_BIAS: 0.2, // fraction the arms keep even with perfect feet
+
+  // Balance. Gravity only destabilises you sideways, so this measures the COM's
+  // horizontal offset from the contacts actually carrying it. True barn-dooring
+  // rotates out of the wall plane and we don't model depth -- see stamina.js.
+  BALANCE_SCALE: 48, // world units of sideways COM offset == 1.0 strain
+  BALANCE_BASE_SPAN: 55, // loaded-contact spread narrower than this is a narrow base
+  BALANCE_NARROW: 1.0, // extra multiplier at maximum narrowness
+  BALANCE_MIN_SHARE: 0.08, // a contact carrying less than this doesn't widen the base
   W_MANTEL: 0.35, // penalty for COM sitting above a loaded hand (pressing)
 
   // ------------------------------------------------------------------ holds ---

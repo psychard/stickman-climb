@@ -35,9 +35,13 @@ ngrok domains.
 - **Use more than one finger.** Limbs drag independently.
 - Reach is finite. Pulling toward something far away makes the body lunge, but if
   it's still out of range the grab just fails and the limb hangs free.
+- **Stand on your feet.** A good stance puts ~80% of your weight through your
+  legs; hanging off your arms is what burns you out. Getting your hips over your
+  feet is the whole game.
+- Feet push, they don't pull. Over-reach with a foot and it pops off the hold.
 - You fall if **all four limbs** come off the wall, or if **stamina** hits zero.
-- Stamina drains from bad holds, stretched-out limbs, and hanging off-balance —
-  and it comes back when you find a solid, compact rest. Look for the jugs.
+- Stamina drains from bad holds, bent limbs, being off-balance, and weight on
+  your arms — and it comes back on a straight-armed, balanced, footed rest.
 
 Tap `dbg` (or press `D`) for the strain breakdown and frame timings. `R` restarts.
 

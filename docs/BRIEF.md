@@ -1,8 +1,12 @@
 # Bouldering Game — Prototype Brief
 
-> This is the original brief, kept verbatim as the source of truth for scope and
-> intent. If the code and this document disagree about *what we're building*,
-> this document wins.
+> The source of truth for scope and intent. If the code and this document
+> disagree about *what we're building*, this document wins.
+>
+> The body is the original brief. Where playing the prototype proved part of it
+> wrong, the text has been corrected in place and the change recorded under
+> [Revisions](#revisions) — so this file always describes what we actually want,
+> and the reasoning for each departure is still on the record.
 
 ## Concept
 
@@ -43,10 +47,11 @@ Three drain factors for v1:
 | Factor | Description |
 |---|---|
 | **Hold quality** | Every hold has a "goodness" rating. A deep jug you could hang off all day drains almost nothing; a tiny crimp bleeds stamina fast. |
-| **Limb extension** | The closer a limb is to its max reach, the more it strains. Fully extended limbs drain faster. |
-| **Center of mass** | The further the figure's center of mass sits outside its base of support (the polygon formed by the planted limbs), the faster the drain. |
+| **Limb flexion** | The more a limb is *bent*, the more it strains. A straight arm hangs off bone and is nearly free; the locked-off arm burns. Legs are the same — a straight leg is cheap, a deep high step is brutal. |
+| **Balance** | The further the figure's center of mass sits sideways of the contacts actually carrying it, the faster the drain. A narrow base of loaded contacts makes the same offset worse. |
+| **Arm load** | The share of bodyweight going through the arms, whatever the holds are like. Hanging off your arms is what you're trying to avoid. |
 
-**Design intent behind these:** the underlying question we're approximating is *"would an average human struggle to hold this position?"* We are deliberately **not** attempting real biomechanics. Start with the three cheap signals above, tune them until the game feels honest, and only add nuance (pull angles, opposing forces, foot vs. hand load) if the simple version feels wrong.
+**Design intent behind these:** the underlying question we're approximating is *"would an average human struggle to hold this position?"* We are deliberately **not** attempting real biomechanics. Start with the cheap signals above, tune them until the game feels honest, and only add nuance (pull angles, opposing forces) if the simple version feels wrong.
 
 Stamina recovery should be meaningfully achievable — a good hold with a balanced, compact body position should regain stamina at a noticeable rate.
 
@@ -104,5 +109,52 @@ The one thing this prototype has to prove is that **dragging limbs around a wall
 ## Open Questions for Later
 
 - How exactly should the torso shift resolve when two limbs are dragged in opposite directions simultaneously?
-- Should feet and hands have different reach and different stamina costs? (Real climbing: legs are far stronger.)
 - Does the figure need momentum for dynamic moves, or is everything static/positional?
+
+---
+
+## Revisions
+
+### 2026-08-09 — biophysics pass
+
+The original v1 stamina model was built as written above and then played. These
+changes came out of that, and this section is the reason the table above no
+longer matches the first draft.
+
+**Limb extension became limb flexion — the original rule had the wrong sign.**
+The brief said strain rises as a limb approaches max reach. It's the reverse: a
+straight arm loads bone and connective tissue and is the classic rest position,
+while the bent, locked-off arm is what pumps you out. Legs behave the same way.
+As written, the model penalised good technique and rewarded pulling in.
+
+**Load distribution became geometric.** Load was a fixed constant per limb type,
+so a hand always carried ~64% of bodyweight whether you were standing on your
+feet or hanging off your arms. Moving your hips over your feet — the single most
+important technique in climbing — therefore did nothing at all. Each contact's
+share now comes from how well it opposes gravity and how near the centre of mass
+sits to it. Standing well now puts ~80% through the feet.
+
+**"Base of support" became balance, and gained an arm-load term.** A support
+polygon is a floor concept; on a vertical wall gravity only destabilises you
+sideways. Real barn-dooring rotates out of the wall plane, which this game
+cannot represent — we decided against a depth axis — so what's modelled is its
+in-plane shadow. The separate arm-load term exists because without it a dead
+hang from two jugs scored as a perfect rest.
+
+**Feet can no longer pull.** A planted foot used to tether the body in tension,
+so you could hang from your feet. Feet now resist compression only, and
+over-extending a leg — or dragging a foot outside its anatomical cone — peels it
+off the hold.
+
+**Limbs gained anatomical pose cones.** Limbs were pure distance constraints, so
+a foot was legal anywhere on a ring around the hip, including above the chest.
+
+### Still open
+
+- Holds are still a direction-free quality scalar. No underclings, sidepulls or
+  slopers that only work when pulled a particular way. Deferred deliberately.
+- Fatigue is still one global bar, though strain is now computed per limb, so
+  per-limb pump (and shaking out one arm) is a small step from here.
+- The generator only checks that stances are *possible*, not that they're good.
+  It produces walls where ~47% of bodyweight sits on the arms on an average
+  stance, which is why rest positions are scarcer than they should be.
