@@ -45,16 +45,10 @@ export const T = {
   },
   POSE_STIFF: 0.7, // how hard the solver pushes a limb back inside its cone
 
-  // Feet are conditional contacts: they're held on by compression and by being
-  // somewhere a leg can actually push from. Both failure modes drop the foot.
-  //
-  // A foot resists compression but cannot hold you in tension, so past this much
-  // over-extension it comes off. Over-reaching with your feet is a risk, not a
-  // free anchor.
-  FOOT_PEEL_SLACK: 6,
-  // ...and a foot dragged this far outside its anatomical cone -- up above the
-  // hip, or wrapped across the body -- has no purchase left either.
-  POSE_PEEL: 10,
+  // Nothing peels a limb off a hold automatically. A planted limb constrains how
+  // far the body can travel, so over-reaching is simply prevented rather than
+  // punished -- the player taps a limb to release it when they want the extra
+  // reach, and then has to hold the position on what's left.
 
   // ---------------------------------------------------------------- solver ---
   SUB_DT: 1 / 120, // fixed physics timestep
@@ -77,8 +71,19 @@ export const T = {
   UPRIGHT_STIFF: 0.012, // weak bias keeping the chest above the hip
   FOOT_PUSH_STIFF: 0.22, // legs pressing the body up off a foothold
   CLAMP_STIFF: 1.0, // hard min/max reach clamps (planted limbs tether here)
-  DRAG_PULL: 0.3, // how hard a dragged limb drags the body toward the target
-  DRAG_LIFT: 0.4, // ...scaled down for the upward component; hauling up is work
+  PROJECT_PASSES: 6, // strict reach projection after relaxation; see projectReach
+  // Applied once per substep (see applyDragPull), so this is much larger than a
+  // per-iteration stiffness would be. Counterintuitively, stronger is better on
+  // every axis: the body reaches the boundary its planted limbs allow within a
+  // substep and stays there, instead of lagging mid-migration and fighting the
+  // constraints across frames. 0.6 -> 6.0 took plant rate 75% -> 93% while
+  // *reducing* peak leg stretch from 8.0u to 4.2u.
+  DRAG_PULL: 6.0, // how hard a dragged limb drags the body toward the target
+  // Damps the upward component: hauling yourself up is muscular work, leaning
+  // sideways is nearly free. This used to be 0.4 to stop a reach levitating the
+  // figure, but that was compensating for feet that could not limit the body.
+  // Now that a planted leg hard-limits it, the damping can be gentle.
+  DRAG_LIFT: 0.8,
   // The lunge needs two thresholds, as fractions of the limb's max reach.
   // START: don't shift the body for anything the limb can already touch --
   //   lunging from the *preferred* length meant every reach hauled the body up,

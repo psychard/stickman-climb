@@ -120,9 +120,19 @@ export function createGame(canvas) {
     pointerUp(id) {
       const p = game.pointers.get(id);
       game.pointers.delete(id);
-      if (!p || !p.limbId || !p.dragging) return;
+      if (!p || !p.limbId) return;
 
       const limb = game.fig.limbs[p.limbId];
+
+      // A tap (touched a limb, never travelled past TAP_SLOP) releases it.
+      // Planted limbs limit how far the body can go, so this is how you buy
+      // extra reach: take a foot off deliberately, then stretch -- and you now
+      // have to hold the position on the contacts you have left.
+      if (!p.dragging) {
+        limb.hold = null;
+        return;
+      }
+
       limb.drag = null;
 
       // Snap from the solved endpoint, which is already reach-clamped -- an

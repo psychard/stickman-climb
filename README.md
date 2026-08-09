@@ -38,7 +38,10 @@ ngrok domains.
 - **Stand on your feet.** A good stance puts ~80% of your weight through your
   legs; hanging off your arms is what burns you out. Getting your hips over your
   feet is the whole game.
-- Feet push, they don't pull. Over-reach with a foot and it pops off the hold.
+- **Tap a limb to take it off its hold.** Planted limbs limit how far your body
+  can move, so if a hold is out of reach, letting go of a trailing foot buys you
+  the stretch — at the cost of holding the position on what's left. Nothing ever
+  comes off the wall on its own.
 - You fall if **all four limbs** come off the wall, or if **stamina** hits zero.
 - Stamina drains from bad holds, bent limbs, being off-balance, and weight on
   your arms — and it comes back on a straight-armed, balanced, footed rest.

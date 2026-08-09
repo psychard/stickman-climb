@@ -141,10 +141,18 @@ cannot represent — we decided against a depth axis — so what's modelled is i
 in-plane shadow. The separate arm-load term exists because without it a dead
 hang from two jugs scored as a perfect rest.
 
-**Feet can no longer pull.** A planted foot used to tether the body in tension,
-so you could hang from your feet. Feet now resist compression only, and
-over-extending a leg — or dragging a foot outside its anatomical cone — peels it
-off the hold.
+**Feet can no longer pull, and nothing peels by itself.** A planted foot used to
+tether the body in tension, so you could hang from your feet. The first fix made
+an over-extended leg peel the foot off — which turned out to read as the game
+breaking rather than as a mistake you'd made, because an ordinary reach would
+silently strip both feet and leave you hanging from one hand.
+
+A planted limb now *limits* how far the body can travel, so over-reaching is
+prevented rather than punished. For a foot that limit is kinematic — your leg is
+only so long — not the foot bearing tension, and the load model still gives it
+no share unless it's genuinely underneath you. **Tapping a limb releases it**,
+which is how you buy the extra reach: give up a contact, and hold the position on
+what's left.
 
 **Limbs gained anatomical pose cones.** Limbs were pure distance constraints, so
 a foot was legal anywhere on a ring around the hip, including above the chest.

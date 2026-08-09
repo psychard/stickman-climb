@@ -45,6 +45,7 @@ function makeWatch() {
   return {
     poseWorst: 0,
     footTension: 0,
+    footTensionDrag: 0,
     bendFlips: 0,
     peels: 0,
     prevBend: {},
@@ -55,6 +56,11 @@ function makeWatch() {
     soloFrames: 0,
     noFeetFrames: 0,
     frames: 0,
+    // True while the figure sits in a stance it never actually reached, because
+    // a missed grab was resynced onto the route. Anatomical invariants are not
+    // recorded then: that stance is an artefact of the harness, not something
+    // the solver produced, so asserting on it measures the wrong thing.
+    synthetic: false,
   };
 }
 
@@ -79,13 +85,17 @@ function observe(watch, fig, stam, moving) {
   for (const id of LIMB_IDS) {
     const limb = fig.limbs[id];
     const pt = limb.hold || (limb.drag ? limb.pos : null);
-    if (pt) {
+    if (pt && !watch.synthetic) {
       watch.poseWorst = Math.max(watch.poseWorst, poseViolation(fig.hip, fig.chest, limb, pt));
     }
-    if (limb.hold && limb.kind === 'foot') {
+    if (limb.hold && limb.kind === 'foot' && !watch.synthetic) {
       const a = anchorOf(fig.hip, fig.chest, limb);
       const d = Math.hypot(limb.hold.x - a.x, limb.hold.y - a.y);
-      watch.footTension = Math.max(watch.footTension, d - specFor(limb.kind).max);
+      const stretch = d - specFor(limb.kind).max;
+      // Elastic give WHILE you're hauling on a limb is the intended feel; what
+      // must not happen is a leg left stretched once the stance has settled.
+      if (moving) watch.footTensionDrag = Math.max(watch.footTensionDrag, stretch);
+      else watch.footTension = Math.max(watch.footTension, stretch);
     }
     // exercise the IK the renderer would run, and watch the bend side
     const a = anchorOf(fig.hip, fig.chest, limb);
@@ -127,7 +137,7 @@ function attemptMove(fig, stam, wall, limb, target, watch) {
   }
   limb.drag = null;
 
-  // any foot that came off while we were moving got peeled by over-extension
+  // nothing should come off a hold unless the player took it off
   for (const other of footHoldsBefore) {
     if (other !== limb.id && !fig.limbs[other].hold) watch.peels++;
   }
@@ -144,6 +154,7 @@ function attemptMove(fig, stam, wall, limb, target, watch) {
   // place, so one marginal failure cascades into dozens of meaningless ones.
   // We want the per-move failure rate, not the length of the first cascade.
   if (!ok) limb.hold = target;
+  watch.synthetic = !ok;
   void previous;
   for (let i = 0; i < SETTLE_STEPS; i++) {
     stepFigure(fig, T.SUB_DT);
@@ -199,6 +210,7 @@ function climb(seed, maxMoves = 400) {
     strainSettled: watch.settledSum / Math.max(1, watch.settledN),
     poseWorst: watch.poseWorst,
     footTension: watch.footTension,
+    footTensionDrag: watch.footTensionDrag,
     peels: watch.peels,
     soloPct: watch.soloFrames / Math.max(1, watch.frames),
     noFeetPct: watch.noFeetFrames / Math.max(1, watch.frames),
@@ -214,11 +226,11 @@ for (const seed of seeds) {
   // oscillating, and that is exactly the "crazy spring" failure mode.
   const jitterOk = r.restJitter < 1.0;
   const plantOk = r.plantRate > 0.9;
-  // a planted foot must never be loaded in tension beyond its peel slack
-  const feetOk = r.footTension <= T.FOOT_PEEL_SLACK + 0.5;
-  // limbs must stay inside their anatomical cone; feet peel past POSE_PEEL, so
-  // that plus a substep of overshoot is the most we should ever observe
-  const poseOk = r.poseWorst < T.POSE_PEEL + 3;
+  // a planted limb constrains the body, so a foot should never be stretched
+  // measurably past leg length -- and nothing should ever come off by itself
+  const feetOk = r.footTension < 1.0 && r.peels === 0;
+  // limbs must stay inside their anatomical cone
+  const poseOk = r.poseWorst < 6;
   // joints may legitimately change side, but not constantly
   const jointsOk = r.flipsPerMove < 0.5;
   // routine climbing should almost never leave you on a single contact, and
@@ -233,14 +245,14 @@ for (const seed of seeds) {
       `(${(r.plantRate * 100).toFixed(0)}%)  ` +
       `jitter ${r.restJitter.toFixed(2)}u  ` +
       `pose ${r.poseWorst.toFixed(2)}u  ` +
-      `footTension ${r.footTension.toFixed(2)}u  ` +
+      `legStretch ${r.footTension.toFixed(2)}u settled / ${r.footTensionDrag.toFixed(2)}u pulling  ` +
       `peels ${r.peels}  ` +
       `solo ${(r.soloPct * 100).toFixed(1)}%  noFeet ${(r.noFeetPct * 100).toFixed(0)}%  ` +
       `flips/move ${r.flipsPerMove.toFixed(2)}  ` +
       `stam min ${r.minStamina.toFixed(2)}  strain move ${r.strainMoving.toFixed(2)} / rest ${r.strainSettled.toFixed(2)}` +
       (jitterOk ? '' : '  <-- OSCILLATING') +
       (plantOk ? '' : '  <-- GRABS FAILING') +
-      (feetOk ? '' : '  <-- FEET PULLING') +
+      (feetOk ? '' : '  <-- FEET STRETCHING OR PEELING') +
       (poseOk ? '' : '  <-- LIMB OUTSIDE CONE') +
       (jointsOk ? '' : '  <-- JOINTS SNAPPING') +
       (contactsOk ? '' : '  <-- STRIPPED TO ONE CONTACT'),

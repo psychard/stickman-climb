@@ -246,6 +246,48 @@ function pushAnchor(state, limb, dx, dy) {
   }
 }
 
+/**
+ * Strict projection of the planted limbs' reach envelopes, run after the soft
+ * relaxation has finished.
+ *
+ * Inside relaxOnce the drag pull and the reach clamps fight each other every
+ * pass and settle at whatever stretch balances them -- measured at 8 units of
+ * over-extended leg, regardless of how long the drag lasts, because it's an
+ * equilibrium rather than a transient. The torso and pose passes that follow the
+ * clamps then undo part of the correction as well.
+ *
+ * So the envelope gets the last word. This is what makes a planted limb actually
+ * limit the body: reaching too far stops, instead of stretching.
+ */
+function projectReach(state, limbs, passes = T.PROJECT_PASSES) {
+  for (let i = 0; i < passes; i++) {
+    for (const limb of limbs) {
+      if (!limb.hold || limb.drag) continue;
+      const a = anchorOf(state.hip, state.chest, limb);
+      const spec = specFor(limb.kind);
+      const dx = limb.hold.x - a.x;
+      const dy = limb.hold.y - a.y;
+      const d = Math.hypot(dx, dy) || 1e-6;
+      let move = 0;
+      if (d > spec.max) move = d - spec.max;
+      else if (d < spec.min) move = d - spec.min;
+      if (move !== 0) pushAnchor(state, limb, (dx / d) * move, (dy / d) * move);
+    }
+    // Pose has to be projected alongside reach, not left to the soft pass.
+    // Enforcing reach on its own can shove the body back out of a limb's cone,
+    // and the two then trade the violation back and forth forever -- measured as
+    // a settled 10.7u pose violation that was completely independent of how hard
+    // the drag was pulling.
+    for (const limb of limbs) {
+      const pt = limb.drag ? limb.drag.target : limb.hold;
+      if (!pt) continue;
+      const c = poseCorrection(state, limb, pt);
+      if (c.x !== 0 || c.y !== 0) pushAnchor(state, limb, c.x, c.y);
+    }
+    enforceTorso(state);
+  }
+}
+
 function enforceTorso(state) {
   const dx = state.chest.x - state.hip.x;
   const dy = state.chest.y - state.hip.y;
@@ -257,19 +299,22 @@ function enforceTorso(state) {
   state.chest.y -= dy * corr;
 }
 
-/** One relaxation pass over all constraints. Mutates state.hip / state.chest. */
-function relaxOnce(state, limbs) {
-  // 1. dragged limbs pull the body -- the lunge.
-  //
-  //    Only the SHORTFALL past max reach moves the body. Reaching for something
-  //    your arm can already touch must not haul your whole body along: you
-  //    extend the arm, and the body only commits once the arm has run out. Doing
-  //    this from `pref` instead meant almost every reach lifted the body,
-  //    stretched both legs past their length, and peeled both feet off at once.
-  //
-  //    Vertical lunge is damped separately. Leaning sideways is nearly free --
-  //    gravity does it for you -- but pulling yourself upward is muscular work,
-  //    so a hand reaching overhead shouldn't levitate you.
+/**
+ * The lunge: dragged limbs pull the body toward the pointer.
+ *
+ * Applied ONCE per substep, as an external displacement alongside gravity --
+ * NOT inside the relaxation loop. A soft constraint re-applied on every
+ * iteration always beats a hard one it opposes: the drag kept re-injecting the
+ * violation that the reach clamps were trying to remove, and the two settled at
+ * a permanent ~8 units of over-extended leg. Applying it once and then letting
+ * the constraints project it is what makes a planted limb genuinely limit you.
+ *
+ * Only the shortfall past max reach moves the body: reaching for something the
+ * limb can already touch must not haul the body along. And the upward component
+ * is damped separately -- leaning sideways is nearly free, hauling yourself
+ * upward is muscular work.
+ */
+function applyDragPull(state, limbs) {
   for (const limb of limbs) {
     if (!limb.drag) continue;
     const a = anchorOf(state.hip, state.chest, limb);
@@ -283,7 +328,10 @@ function relaxOnce(state, limbs) {
       pushAnchor(state, limb, (dx / d) * move, cy < 0 ? cy * T.DRAG_LIFT : cy);
     }
   }
+}
 
+/** One relaxation pass over all constraints. Mutates state.hip / state.chest. */
+function relaxOnce(state, limbs) {
   // 2. planted feet push the body up off the hold (one-sided: legs press, they
   //    never pull you back down)
   for (const limb of limbs) {
@@ -301,11 +349,18 @@ function relaxOnce(state, limbs) {
 
   // 3. planted limbs clamp the body inside their reach envelope.
   //
-  //    Hands clamp BOTH ways: they tether you in tension (this is what hanging
-  //    is) and stop the body collapsing into the hold. Feet only clamp the
-  //    compression side -- a foot on a foothold cannot hold you down. If the
-  //    body gets further away than the leg is long the foot comes off, which
-  //    stepFigure() handles; here it simply stops resisting.
+  //    A limb is a strut of fixed maximum length, so a planted one LIMITS how
+  //    far the body can travel. For a foot that limit is kinematic, not the foot
+  //    bearing tension: your leg is only so long, so reaching too far simply
+  //    doesn't happen rather than ripping your foot off the hold. If you want
+  //    the extra reach, take the foot off deliberately (tap it) and pay for it
+  //    by supporting yourself on what's left.
+  //
+  //    This is safe to apply to feet only because the pose cones exist. On their
+  //    own, max-reach clamps on feet let you dangle below a foothold -- hanging
+  //    from your feet. The cone caps a foot at POSE.FOOT_RISE above the hip, so
+  //    that geometry is forbidden outright, and gravity can only ever compress a
+  //    leg whose foot is beneath you. Extension is always voluntary.
   for (const limb of limbs) {
     if (!limb.hold || limb.drag) continue;
     const a = anchorOf(state.hip, state.chest, limb);
@@ -314,7 +369,7 @@ function relaxOnce(state, limbs) {
     const dy = limb.hold.y - a.y;
     const d = Math.hypot(dx, dy) || 1e-6;
     let move = 0;
-    if (d > spec.max && limb.kind === 'hand') move = (d - spec.max) * T.CLAMP_STIFF;
+    if (d > spec.max) move = (d - spec.max) * T.CLAMP_STIFF;
     else if (d < spec.min) move = (d - spec.min) * T.CLAMP_STIFF;
     if (move !== 0) pushAnchor(state, limb, (dx / d) * move, (dy / d) * move);
   }
@@ -379,7 +434,10 @@ export function stepFigure(fig, dt) {
   fig.hip.y += sag;
   fig.chest.y += sag;
 
+  // external inputs first, then let the constraints resolve them
+  applyDragPull(fig, limbs);
   for (let i = 0; i < T.ITERATIONS; i++) relaxOnce(fig, limbs);
+  projectReach(fig, limbs);
 
   // Only a fraction of the solved motion becomes momentum. At equilibrium the
   // sag is cancelled by the tethers, the delta is ~0, and the body goes still.
@@ -389,30 +447,7 @@ export function stepFigure(fig, dt) {
   fig.chestV.x = (fig.chest.x - prevChest.x) * f;
   fig.chestV.y = (fig.chest.y - prevChest.y) * f;
 
-  peelOverextendedFeet(fig, limbs);
   placeEndpoints(fig, limbs);
-}
-
-/**
- * Feet are conditional contacts and drop when either condition fails.
- *
- * A foot can push but not pull, so once the hip is further from the foothold
- * than the leg is long there is nothing holding it on. And a foot dragged well
- * outside its anatomical cone -- up above the hip, or wrapped across the body --
- * has no purchase either. Hands are deliberately exempt: a hand *is* a tension
- * anchor, and hanging is the whole point of one.
- */
-function peelOverextendedFeet(fig, limbs) {
-  for (const limb of limbs) {
-    if (limb.kind !== 'foot' || !limb.hold || limb.drag) continue;
-    const a = anchorOf(fig.hip, fig.chest, limb);
-    const d = Math.hypot(limb.hold.x - a.x, limb.hold.y - a.y);
-    if (d > T.LEG.max + T.FOOT_PEEL_SLACK) {
-      limb.hold = null;
-      continue;
-    }
-    if (poseViolation(fig.hip, fig.chest, limb, limb.hold) > T.POSE_PEEL) limb.hold = null;
-  }
 }
 
 /** Position the visible limb endpoints from the solved body. */
@@ -507,6 +542,9 @@ export function solveStatic(pts, iters = T.GEN_SOLVE_ITERS) {
     state.chest.y += nudge;
     relaxOnce(state, limbs);
   }
+  // same projection the live solver applies, so the generator's idea of a
+  // reachable stance matches what the game will actually allow
+  projectReach(state, limbs);
 
   let violation = 0;
   for (const limb of limbs) {

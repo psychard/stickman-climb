@@ -46,13 +46,31 @@ Shoulder and hip sockets are derived from those two, so torso lean and rotation
 fall out for free. Each substep relaxes a small constraint set in this order
 (Gauss-Seidel: later constraints win):
 
-1. dragged limbs **pull** the body toward the pointer — this is the lunge
-2. planted feet **push** the body up off their hold (legs are struts, one-sided)
-3. planted limbs clamp the body inside their reach envelope — **hands both ways,
-   feet only in compression**
-4. **pose cones** keep each limb anatomically plausible relative to the torso
-5. torso keeps its length
-6. weak bias keeps the chest above the hip
+Gravity **and the drag lunge** are applied once per substep as external
+displacements, then the constraints are relaxed:
+
+1. planted feet **push** the body up off their hold (legs are struts, one-sided)
+2. planted limbs clamp the body inside their reach envelope
+3. **pose cones** keep each limb anatomically plausible relative to the torso
+4. torso keeps its length
+5. weak bias keeps the chest above the hip
+
+and finally `projectReach` enforces reach + pose + torso strictly, so the
+envelope gets the last word.
+
+**Apply the drag once per substep, never inside the relaxation loop.** A soft
+constraint re-applied every iteration always beats a hard one it opposes: the
+lunge kept re-injecting exactly the violation the reach clamps were removing, and
+they settled at a permanent ~8 units of over-extended leg that was completely
+independent of drag strength or drag duration. Same reason `projectReach` exists
+and runs last — enforcing reach on its own can shove the body out of a limb's
+pose cone, so the two have to be projected together or they trade the violation
+back and forth forever.
+
+Because the constraints now get the last word, `DRAG_PULL` wants to be *large*
+(6.0, not 0.3): the body reaches the boundary its planted limbs allow within a
+substep and stays there, instead of lagging mid-migration. Raising it took plant
+rate 75% → 93% while *reducing* peak leg stretch.
 
 A dragged limb never stretches past max reach. The pointer pulls the *body*, and
 if the body can't get there the grab fails. Visual elasticity past max is capped
@@ -78,17 +96,33 @@ pair of them is load-bearing:
 free, hauling yourself upward is muscular work. A hold far above your max reach
 is therefore genuinely unreachable, which is what the brief asks for.
 
-Reaching in any direction at up to 120% of max reach must leave both feet on the
-wall. `sim` asserts this as `solo` (frames on a single contact, should be 0%) and
-`noFeet` (frames with both feet off, a few percent).
+Reaching in any direction, at any distance, must leave both feet on the wall.
+`sim` asserts `peels` (0), `solo` (frames on a single contact, 0%), `noFeet`
+(0%), and `legStretch` settled (< 1u). It reports stretch *while pulling*
+separately — elastic give under load is the intended feel, a leg left stretched
+once the stance settles is not.
 
-### Hands hold you on; feet only hold you up
+### A planted limb limits you; nothing peels by itself
 
-A hand is a tension anchor — hanging off one is the whole point. A foot is a
-*conditional* contact: it can push but never pull, so it drops off the hold when
-either condition fails. Over-extend the leg past `FOOT_PEEL_SLACK`, or drag the
-foot more than `POSE_PEEL` outside its cone, and the foot peels. Feet used to
-tether like hands, which meant you could hang from your feet.
+**Nothing ever comes off a hold automatically.** A planted limb is a strut of
+fixed maximum length, so it caps how far the body can travel — reaching too far
+simply doesn't happen, rather than ripping a foot off the wall. If the player
+wants the extra reach they **tap a limb to release it** (a touch that never
+travels past `TAP_SLOP`), and then have to hold the position on what's left.
+Releasing a trailing foot buys ~8 units of lateral reach.
+
+Auto-peeling was tried and removed: reaching would silently strip your feet off
+and leave you hanging from one hand, which reads as the game breaking rather than
+as a mistake you made.
+
+For a foot the limit is **kinematic, not tension** — your leg is only so long.
+This is only safe because the pose cones exist. Max-reach clamps on feet with no
+cone let you dangle below a foothold, hanging from your feet; the cone caps a
+foot at `POSE.FOOT_RISE` above the hip, so that geometry is forbidden outright
+and gravity can only ever *compress* a leg whose foot is beneath you. Leg
+extension is always voluntary. The load model separately gives a foot ~0 share
+unless it's genuinely underneath the COM, so a limiting leg isn't a supporting
+one.
 
 Pose cones live in the torso frame (`limbPose`): `up` toward the head, `out`
 sideways on the limb's own side. Without them a limb is a pure distance
