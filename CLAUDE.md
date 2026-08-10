@@ -69,8 +69,11 @@ removing those entries makes the tunnel 502 while localhost keeps working.
 
 ## Deploying
 
-Pushing to `main` publishes to <https://psychard.github.io/stickman-climb/> via
-`.github/workflows/pages.yml` (npm ci → `verify` → `build` → upload → deploy).
+Pushing to `main` publishes via `.github/workflows/pages.yml`
+(npm ci → `verify` → `build` → upload → deploy). The `psychard` account has a
+Pages custom domain, so `https://psychard.github.io/stickman-climb/` 301s to
+<http://www.psychard.com/stickman-climb/> — that redirect is account-level and
+not configured by this repo.
 The Pages source is set to "GitHub Actions", not deploy-from-branch, so there is
 no `gh-pages` branch and nothing to commit — `dist/` stays gitignored.
 
