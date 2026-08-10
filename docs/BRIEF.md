@@ -65,8 +65,10 @@ The view scrolls to keep the figure roughly centered as they climb. The wall scr
 
 - **Procedurally generated from a seed.** The same seed always produces the same wall.
 - Effectively infinite wall space. (Later: let players enter a seed to replay or share a specific climb — not needed for the prototype, but don't design it out.)
-- **Hard constraint: every generated wall must be climbable.** The generator needs to verify that each successive move is within the figure's reach envelope from a plausible stance. Don't generate holds and hope.
+- **Hard constraint: every generated wall must be climbable.** The generator needs to verify that each successive move is within the figure's reach envelope from a plausible stance. Don't generate holds and hope. This holds at every difficulty level, and `npm run verify` proves it for all five.
 - Difficulty ramps with height: holds get sparser, smaller, and further apart as the player ascends.
+- **Five difficulty levels**, chosen from a menu. A level is a floor under that same ramp, so picking a harder wall is the same as starting further up an easier one. Level 1 is the original wall.
+- **Sparse walls are the goal at the hard end, not just bad holds.** It is correct for there to be no legal right-hand move until the right foot has moved, and none for that until the left foot has. Working out which limb can move, and in what order, is the puzzle — so the generator reuses holds rather than placing a fresh one for every move.
 
 ---
 
@@ -74,20 +76,19 @@ The view scrolls to keep the figure roughly centered as they climb. The wall scr
 
 Build **only** this:
 
-- One wall, one fixed seed.
+- Five walls, one fixed seed each, picked from a menu.
 - 2D stick figure with four draggable limbs.
 - Multitouch dragging.
 - Max-reach limits with body lunge/shift.
 - Stamina bar with the three drain factors and recovery.
-- Falling on peel-off and on stamina depletion.
+- Falling on peel-off and on stamina depletion; falling returns to the menu.
 - Scrolling camera.
 
 Explicitly **out of scope for now** (do not build these yet):
 
 - Visual polish, art, animation flourishes
-- Difficulty tuning beyond rough placeholders
-- Seed entry, sharing, or level select
-- Menus, scoring, leaderboards, progression
+- Seed entry or sharing
+- Scoring, leaderboards, progression, saved results
 - Sound
 
 The one thing this prototype has to prove is that **dragging limbs around a wall feels good**. Everything else waits.
@@ -157,14 +158,56 @@ what's left.
 **Limbs gained anatomical pose cones.** Limbs were pure distance constraints, so
 a foot was legal anywhere on a ring around the hip, including above the chest.
 
+### 2026-08-09 — menu and five difficulties
+
+Requested after playing the single wall: it is too easy, because it has so many
+holds. Menus and level select had been explicitly out of scope; they're in now,
+and the scope list above has been corrected rather than left contradicting the
+game.
+
+**A level is a floor, not a second difficulty system.** The brief already said
+difficulty ramps with height. A level now sets where on that ramp you start, so
+one number moves hold quality, filler density and move distance together. Level 1
+is floor 0 — the original wall, route-identical.
+
+**Harder walls have genuinely fewer holds, via reuse.** The first attempt at this
+concluded that hold density was fixed by anatomy — one new hold per limb move, and
+a limb can only move so far. That was wrong, and it was wrong because it assumed
+every move needs its *own* hold. A hold placed for a hand sits at foot height a
+body-length later, so a foot can just step onto it and the move costs no hold at
+all. The generator now tries reuse before inventing anything, more often as
+difficulty rises, and density falls 8.8 → 4.1 holds per 100u across the ladder.
+
+Reuse is feet-only in practice: the hands are the top of the route, so there is
+never anything above them to move onto. That puts a floor of about one new hold per
+hand move on this design.
+
+**Order is the puzzle, and it's now measured.** `npm run ladder` reports how many
+legal moves a stance offers and how many limbs have none. Level 1 offers 10.7 moves
+per stance, so any order works. Level 5 offers 4, with more than one limb stuck on
+average — so there may be no right-hand move until the right foot has moved, and
+none for that until the left foot has. Hold quality still carries the stamina side
+of the ladder (0.79 → 0.15, rests 40% → 5%).
+
+**The fall screen was folded into the menu.** Falling now returns to the list
+carrying the reason and height, rather than showing a retry overlay, so a retry is
+one tap and switching walls is the same tap.
+
 ### Still open
 
+- The live solver sometimes wedges a planted limb past its max reach and never
+  recovers, so a leg stays visibly over-extended. It affects ~0.5% of settled
+  frames and `npm run sim`, which asserts on the worst frame in a run, currently
+  fails 4 of the 5 levels on it. It is pre-existing, and measurement says neither
+  the levels nor hold reuse made it more likely. It is the main thing standing
+  between these walls and being properly shippable. CLAUDE.md has a repro and the
+  hypotheses already falsified.
 - Holds are still a direction-free quality scalar. No underclings, sidepulls or
   slopers that only work when pulled a particular way. Deferred deliberately.
 - Fatigue is still one global bar, though strain is now computed per limb, so
   per-limb pump (and shaking out one arm) is a small step from here.
 - The generator only checks that stances are *possible*, not that they're good.
-  It produces walls where ~35% of bodyweight sits on the arms on an average
+  It produces walls where ~33% of bodyweight sits on the arms on an average
   stance and never tries to put the feet under the body, which is why rest
   positions are scarcer than they should be. This is the highest-value piece of
   work left.

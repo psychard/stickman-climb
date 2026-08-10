@@ -18,7 +18,8 @@ const game = createGame(canvas);
 attachInput(canvas, game);
 
 // Handy from the Safari/Chrome console while tuning: inspect or poke live state,
-// e.g. __game.fig.hip, __game.stam.parts, __game.debug = true.
+// e.g. __game.fig.hip, __game.stam.parts, __game.debug = true. Note that `fig`
+// and `wall` are null until a level is picked -- the menu loads first.
 window.__game = game;
 
 function readSafeInsets() {
@@ -56,7 +57,6 @@ function resize() {
 }
 
 resize();
-game.restart();
 
 new ResizeObserver(resize).observe(stage);
 window.addEventListener('orientationchange', () => setTimeout(resize, 120));

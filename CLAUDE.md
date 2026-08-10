@@ -8,15 +8,27 @@ scope and intent, and it wins over anything inferred from the code.
 
 **The prototype exists to answer one question: does dragging limbs around a wall
 feel good?** Work that doesn't serve that is out of scope. Explicitly not wanted
-yet: visual polish, art, sound, menus, scoring, progression, seed entry, level
-select, or difficulty tuning beyond rough placeholders.
+yet: visual polish, art, sound, scoring, progression, or seed entry.
+
+A menu with five difficulty levels *was* on that not-wanted list and was added on
+request, because one wall at one difficulty couldn't answer the question — the
+original wall has so many good holds that route-finding is trivial. See
+[Menu and difficulty](#menu-and-difficulty).
 
 ## Where things stand
 
 Working and verified: draggable limbs with multitouch, reach limits with body
 lunge, anatomical pose limits, geometric load distribution, stamina with rest and
-recovery, falling, scrolling camera, and seeded walls that are climbable by
-construction. Frame cost ~0.3ms of a 16.7ms budget.
+recovery, falling, scrolling camera, seeded walls that are climbable by
+construction, and a level menu with five difficulties. Frame cost ~0.3ms of a
+16.7ms budget.
+
+**One thing is known-broken:** the live solver occasionally wedges a planted limb
+past its max reach and never recovers. It happens on ~0.5% of settled frames, and
+because `sim` asserts on the *worst* frame in a run, that currently fails 4 of the
+5 levels. Which levels fail is close to luck — the rate barely moves across them.
+It is pre-existing and not caused by the levels or by hold reuse (both measured);
+see [The stuck-limb deadlock](#the-stuck-limb-deadlock).
 
 Standing decisions, so they don't get relitigated by accident:
 
@@ -27,6 +39,8 @@ Standing decisions, so they don't get relitigated by accident:
 | **Holds are a direction-free quality scalar.** No underclings, sidepulls or slopers that only work when pulled a particular way. | Deferred |
 | **Nothing peels off a hold automatically.** Planted limbs limit reach; the player taps a limb to release it. | Settled — replaced auto-peel |
 | **Tap-to-release applies to hands too**, not only feet. | Settled, but flagged: a mistimed tap on a hand can drop you |
+| **Difficulty is one scalar.** A level sets a *floor* under the same easy→hard number the height ramp already drives; there is no second difficulty system. | Settled |
+| **Falling returns to the menu**, carrying the reason and height with it. There is no separate retry screen. | Settled |
 
 The brief in `docs/BRIEF.md` has been revised where playtesting proved it wrong;
 its Revisions section records what changed and why.
@@ -35,12 +49,14 @@ its Revisions section records what changed and why.
 
 ```bash
 npm run dev      # Vite dev server on :5173, bound to 0.0.0.0
-npm run verify   # prove generated walls are climbable (static solve)
+npm run verify   # prove generated walls are climbable (static solve), all 5 levels
 npm run sim      # headless auto-climber (live solver): plant rate, jitter, invariants
 npm run measure  # what the biophysics model actually does, in numbers
+npm run ladder   # are the five levels actually five difficulties?
 ```
 
-`verify` and `sim` answer "is it broken?"; `measure` answers "what does it do?".
+`verify` and `sim` answer "is it broken?"; `measure` and `ladder` answer "what
+does it do?".
 Several constants in `tuning.js` cite measured numbers — **if you change a strain
 term, a load rule or a reach constant, run `measure` and update whatever you
 invalidated**, here and in the tuning comments. The numbers below were last
@@ -59,7 +75,7 @@ removing those entries makes the tunnel 502 while localhost keeps working.
 | `src/wall.js` | seeded generation, climbability proof, spatial index |
 | `src/stamina.js` | load distribution + the drain factors, as one `strain` scalar |
 | `src/game.js` | state, camera, drag interaction |
-| `src/render.js` | canvas drawing |
+| `src/render.js` | canvas drawing, the HUD, and the level menu |
 | `src/input.js` | Pointer Events plumbing |
 | `src/main.js` | canvas sizing, safe-area insets, frame loop |
 
@@ -174,6 +190,34 @@ If it ever starts skittering again, check this first.
 `npm run sim` guards both: it fails the run if an idle hanging figure travels
 more than ~1 world unit over 120 substeps.
 
+### The stuck-limb deadlock
+
+**Open bug, and the most valuable thing to fix.** Arriving from certain stances,
+the live solver settles with a planted limb 1–9 units past its max reach and
+stays there — it is a stable fixed point, not slow convergence. A worked repro
+(level 3, move 20): both hands on the left at x≈180, the right foot out at
+x≈282; the live hip sits at x≈200 leaving RF 81.2u from its socket against a
+LEG.max of 80. `solveStatic` on those *same four holds* finds a clean solution at
+hip x≈254 with a 0.02u violation. The live body is 59u away from it, wedged
+between the limbs that want it right and the left foot's *minimum*-reach clamp
+pushing back.
+
+Four hypotheses have been tested and falsified, so don't re-run them:
+
+- Not a harness artefact. Excluding force-planted holds per-limb rather than
+  globally doesn't remove it, and on hard levels *every* offending frame is on a
+  hold the figure genuinely planted itself.
+- Not slow convergence. Settling for 1.33s instead of 0.15s changes nothing.
+- Not the projection budget. `PROJECT_PASSES` 6 → 24 doesn't help.
+- Not simply the min-reach clamp, despite that being the mechanism in the repro
+  above. `LEG.min` 26 → 8 makes it dramatically *worse* (24–28u), and splitting
+  `projectReach` into min-then-max sweeps so max always wins is neutral.
+
+It scales with difficulty, so it is not caused by the new levels: level 1 has it
+too, above ~2000u. It was invisible until now only because `sim` stops when the
+harness pumps out, which on level 1 is move ~187. Run `node tools/sim-check.mjs
+400` with the stamina break commented out to see it on every level.
+
 **Two-bone IK has its own two traps**, both in `ikJoint`. Normalise by the TRUE
 distance — clamping the length first and then dividing leaves a direction vector
 longer than unit exactly when the limb is at full extension. And the bend side
@@ -187,8 +231,10 @@ Strain is one scalar built from four terms — hold quality, flexion, balance, a
 arm load — and `REST_STRAIN` is the threshold between draining and recovering.
 The whole pacing mechanic is that one number.
 
-It's calibrated against the measured spread of **real route stances** (currently
-p25 ≈ 0.28, median ≈ 0.37, p90 ≈ 0.69), so about the best quarter recover.
+It's calibrated against the measured spread of **real route stances** on level 1
+(currently p25 ≈ 0.30, median ≈ 0.37, p90 ≈ 0.63), so about the best quarter
+recover. Harder levels are deliberately worse: `ladder` reports rests falling from
+40% of stances on level 1 to 5% on level 5.
 `npm run measure` prints that spread and the resulting recover fraction. Always
 calibrate against it rather than against idealised stances: a clean test-harness
 stance scores ~0.12, far below anything the generator actually produces, and
@@ -221,17 +267,31 @@ runs the **actual body solver** headlessly — says the resulting four-point sta
 is holdable. Route holds are therefore a proven-climbable ladder by construction;
 filler holds are decoration and alternates.
 
-Each route hold records which limb moved to it (`hold.limb`), which is what lets
-`routeStances()` replay the route for verification.
+Each move first tries to land on a hold that already exists (`pickReusable`) and
+only invents a new one if none works, which is what keeps hard walls sparse — see
+[Menu and difficulty](#menu-and-difficulty). The guarantee is unaffected: a reused
+hold goes through the same feasibility check as a fresh one.
+
+**The route is `wall.route`, an ordered list of `{ limb, hold }` moves** — not the
+holds array. It used to be reconstructed by filtering `holds` and reading a
+`hold.limb` back off each one, which only worked while every move placed exactly
+one new hold. Hold reuse broke that: a hold can serve several moves, by different
+limbs, at different times. `routeStances()` and `moveDistances()` both replay the
+move list, and anything measuring the route must do the same.
 
 Both checks matter and they check different things:
 
-- `npm run verify` — re-proves every route stance statically, across many seeds.
-  Catches a retune of the reach constants silently making walls unclimbable.
+- `npm run verify` — re-proves every route stance statically, at every level and
+  starting with the seed the menu actually serves for it. Catches a retune of the
+  reach constants silently making walls unclimbable.
 - `npm run sim` — replays those same routes through the live per-frame solver.
   Catches oscillation, failed grabs, and dynamic/static mismatch.
 
-Expect ~92–96% per-move plant rate from `sim`. It drags for a fixed 0.18s and
+`sim` stops a run when the harness pumps out, so hard levels are exercised over
+far fewer moves than easy ones (`pumpedAt` reports where). That is the coverage
+limit that hid the stuck-limb deadlock; pass a `maxMoves` argument to dig deeper.
+
+Expect ~91–96% per-move plant rate from `sim`. It drags for a fixed 0.18s and
 releases blind; a human holds until the target ring highlights, so real success
 is higher. A large drop means something regressed.
 
@@ -247,11 +307,76 @@ stances are excluded from the anatomical invariants (`watch.synthetic`) — the
 figure never actually achieved them, so asserting on them measures the harness.
 
 **Known gap — the obvious next piece of work.** The generator only checks stances
-are *possible*, never that they're good. It averages ~35% of bodyweight on the
+are *possible*, never that they're good. It averages ~33% of bodyweight on the
 arms across a route, and it never tries to put the feet under the body, which is
 why rests are scarcer than they should be and why `REST_STRAIN` has to sit so
 high. Teaching `stanceFeasible` to *prefer* low-arm-load stances (rather than
 merely accept any feasible one) is the highest-value change available.
+
+## Menu and difficulty
+
+The state machine is `menu → building → climbing → falling → menu`. The menu
+loads first, so **`game.wall` and `game.fig` are null until a level is picked** —
+both the update and the draw path have to tolerate that. Falling goes back to the
+menu after `FALL_LINGER`, carrying `game.last` (level, reason, height) so the list
+doubles as the fall screen; there is no separate retry overlay any more.
+
+`building` is a real state and not ceremony: generating a wall runs the body
+solver a few thousand times (~230ms on a laptop, worse on a phone). Generating
+inside the tap handler freezes the menu mid-tap and reads as a dropped tap, so the
+tap only sets state and `update` waits for the "building" frame to be presented
+before calling the generator.
+
+The menu is canvas-drawn like the rest of the HUD, hit-tested against
+`menuRects(view)`. Layout is derived from the view, not a design size, so the same
+code works in a phone column and a letterboxed desktop window — and drawing and
+hit testing read the same rects, so they cannot disagree.
+
+**A level is one number.** `T.LEVELS[i].floor` is a floor under the same easy→hard
+scalar the height ramp already drives (`difficultyAt(height, floor)`), so it moves
+hold quality, filler density and move distance together. Level 1 is floor 0, i.e.
+the wall the prototype had before the menu — its route geometry is bit-identical,
+because move distance is untouched and only quality and filler changed.
+
+`npm run ladder` is the tool that justifies the spacing, and the table in
+`tuning.js` is its output — regenerate it if you touch `LEVELS`, `MOVE_DIST`,
+`QUALITY_*`, `REUSE*`, `FILL_DENSITY`, `DIFF_FULL_HEIGHT`, or anything that moves
+strain. Currently the auto-climber gets 1809/1621/1391/987/799u up the five levels.
+
+The column to watch is **`choices`**: how many legal moves a stance offers, and
+`stuck`, how many of the four limbs have none at all. That is the difference
+between a staircase and a problem — on level 5 an average stance offers 4 moves
+and more than one limb has nowhere to go, so there may be no right-hand move until
+the right foot has moved, and none for that until the left foot has. Ordering is
+the puzzle. Level 1 offers 10.7 moves a stance, where any order works.
+
+**Move distance is not the difficulty lever it looks like.** `MOVE_DIST` ramps
+52 → 84 across the ladder but the *achieved* move only goes 62 → 69, because a
+limb move is capped by anatomy (`ARM.max` 68, `LEG.max` 80) and the feasibility
+check refuses anything longer. Asking for longer moves just costs plant rate.
+
+**Sparseness comes from hold reuse, and nothing else.** While the generator placed
+one new hold per limb move, density was pinned near 9.5 holds per 100u whatever
+else you tuned — a limb can only move so far, so the holds it needs arrive at a
+fixed rate. `T.REUSE` lets a move land on a hold that already exists, which breaks
+that link: density now runs 8.8 → 4.1 per 100u across the ladder.
+
+Reuse is a **feet-only** mechanism in practice, and that's structural rather than
+a tuning failure. The hands are the top of the route, so nothing exists above them
+to move onto — a hand's candidate pool is empty on 100% of attempts. Feet succeed
+about 80% of the time, stepping onto holds placed for hands a body-length earlier,
+which is exactly what real climbing does. So total reuse tops out near 40%, and
+~0.5 new holds per move (one per hand move) is this generator's floor.
+
+Letting a hand **match** onto the other hand's hold was tried, to give hands
+something to reuse. It backfires: hanging both hands on one hold leaves an awkward
+stance, the next move backs off (`backoffs` 5 → 99), each move climbs less, and
+the wall ends up with *more* holds. Don't re-try it without fixing that first.
+
+The hard ends of `QUALITY_ROUTE` and `QUALITY_FILL` were widened (0.3 → 0.1 and
+0.12 → 0.04) when the levels went in. At the old values the top three rungs
+collapsed onto each other — the auto-climber reached 1103/1008/1015u, i.e. levels
+4 and 5 were the same difficulty.
 
 ## Coordinates
 
@@ -274,9 +399,13 @@ area insets are read from the `#safe-probe` element, since `env()` is CSS-only.
 ## Debugging
 
 `window.__game` is exposed in dev — inspect `__game.fig.hip`, `__game.stam.parts`,
-or set `__game.debug = true`. The `dbg` button (or `D`) shows the strain
-breakdown, the per-limb load shares, per-frame update/render cost, and the centre
-of mass. `R` restarts.
+or set `__game.debug = true`. Note `fig` and `wall` are null while the menu is up.
+The `dbg` button (or `D`) shows the strain breakdown, the per-limb load shares,
+per-frame update/render cost, and the centre of mass. `R` restarts the current
+level, `M` or `Escape` goes back to the menu, and the number keys jump straight to
+a level from anywhere. `__game.startLevel(i)` does the same from the console, but
+it needs two frames to build — and `requestAnimationFrame` throttles hard when the
+browser pane isn't focused, so give it seconds, not milliseconds.
 
 Frame cost is ~0.3ms of a 16.7ms budget, so if the browser reports a low fps it's
 throttling, not the game — check `msUpdate` / `msRender` before optimising.

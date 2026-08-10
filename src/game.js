@@ -1,6 +1,17 @@
 /**
  * Game state, camera and the drag interaction.
  *
+ * The state machine is menu -> building -> climbing -> falling -> menu. The menu
+ * is what loads first and it's where a fall puts you, so a wall only exists once
+ * a level has been picked -- `wall` and `fig` are null in the menu, and both the
+ * update and the draw path have to tolerate that.
+ *
+ * `building` exists because generating a wall runs the body solver a few thousand
+ * times (~250ms on a laptop, more on a phone). Doing that synchronously inside
+ * the tap handler freezes the menu mid-tap, which reads as the tap having been
+ * dropped. So the tap only sets the state, and generation waits until the frame
+ * that says "building" has actually been presented.
+ *
  * Interaction notes that matter for feel:
  *  - Touching a limb doesn't move it. The grab only becomes a drag once the
  *    pointer travels past TAP_SLOP, so a thumb resting on a limb can't start
@@ -17,7 +28,7 @@
  *    matter how far past it you drag.
  */
 
-import { T } from './tuning.js';
+import { T, levelAt } from './tuning.js';
 import { generateWall, holdsNear } from './wall.js';
 import {
   createFigure,
@@ -28,7 +39,7 @@ import {
   LIMB_IDS,
 } from './body.js';
 import { createStamina, updateStamina } from './stamina.js';
-import { draw, debugButtonRect } from './render.js';
+import { draw, debugButtonRect, menuButtonRect, menuHit, hitsRect } from './render.js';
 
 export function createGame(canvas) {
   const game = {
@@ -43,12 +54,15 @@ export function createGame(canvas) {
       dpr: 1,
       safe: { top: 0, right: 0, bottom: 0, left: 0 },
     },
-    wall: generateWall(T.SEED),
+    wall: null, // no wall until a level is picked
     fig: null,
     stam: createStamina(),
     cam: { y: 0 },
     accum: 0, // fixed-timestep reservoir
-    state: 'climbing', // climbing | falling | fallen
+    state: 'menu', // menu | building | climbing | falling
+    level: 0, // index into T.LEVELS
+    buildFrames: 0,
+    last: null, // previous attempt, shown on the menu: { level, reason, height }
     fallReason: '',
     fallTimer: 0,
     bestHeight: 0,
@@ -65,9 +79,23 @@ export function createGame(canvas) {
       };
     },
 
+    showMenu() {
+      game.state = 'menu';
+      game.pointers.clear();
+    },
+
+    /** Pick a level from the menu. The wall is built a frame later; see above. */
+    startLevel(index) {
+      game.level = Math.max(0, Math.min(T.LEVELS.length - 1, index | 0));
+      game.state = 'building';
+      game.buildFrames = 0;
+      game.pointers.clear();
+    },
+
+    /** Retry the current level. No-op from the menu, where there is no level yet. */
     restart() {
-      if (game.fig) resetToStance(game.fig, game.wall.start);
-      else game.fig = createFigure(game.wall.start);
+      if (!game.wall) return;
+      resetToStance(game.fig, game.wall.start);
       game.stam = createStamina();
       game.state = 'climbing';
       game.accum = 0;
@@ -83,18 +111,21 @@ export function createGame(canvas) {
 
     // ---------------------------------------------------------------- input
     pointerDown(id, screenPt) {
-      if (game.state === 'fallen') {
-        game.restart();
+      if (game.state === 'menu') {
+        const pick = menuHit(game.view, screenPt);
+        if (pick !== null) game.startLevel(pick);
         return;
       }
+      // Ignore input while building and while falling. Falling matters: a finger
+      // still down as the fall plays out must not have its touch land on the menu
+      // that replaces it and start a level the player never chose.
+      if (game.state !== 'climbing') return;
 
-      const b = debugButtonRect(game.view);
-      if (
-        screenPt.x >= b.x &&
-        screenPt.x <= b.x + b.w &&
-        screenPt.y >= b.y + 22 &&
-        screenPt.y <= b.y + 22 + b.h
-      ) {
+      if (hitsRect(menuButtonRect(game.view), screenPt)) {
+        game.showMenu();
+        return;
+      }
+      if (hitsRect(debugButtonRect(game.view), screenPt)) {
         game.toggleDebug();
         return;
       }
@@ -153,9 +184,20 @@ export function createGame(canvas) {
     },
   };
 
-  game.fig = createFigure(game.wall.start);
-  snapCamera(game);
   return game;
+}
+
+/** Generate the picked level's wall and put the figure on its start stance. */
+function buildLevel(game) {
+  const level = levelAt(game.level);
+  game.wall = generateWall(level.seed, game.level);
+  game.fig = createFigure(game.wall.start);
+  game.stam = createStamina();
+  game.state = 'climbing';
+  game.accum = 0;
+  game.fallTimer = 0;
+  game.bestHeight = 0;
+  snapCamera(game);
 }
 
 /** Closest limb endpoint to the touch, if one is close enough to mean it. */
@@ -186,6 +228,15 @@ function snapCamera(game) {
 }
 
 export function update(game, dt) {
+  if (game.state === 'menu') return;
+
+  // Wait for the "building" frame to actually reach the screen before spending a
+  // quarter of a second in the generator, or the tap looks like it was dropped.
+  if (game.state === 'building') {
+    if (game.buildFrames++ > 0) buildLevel(game);
+    return;
+  }
+
   const { fig } = game;
 
   // Fixed-step physics so the solver behaves identically at 60 and 120Hz.
@@ -207,8 +258,17 @@ export function update(game, dt) {
     if (planted === 0) beginFall(game, 'PEELED OFF');
     else if (game.stam.value <= 0) beginFall(game, 'PUMPED OUT');
   } else if (game.state === 'falling') {
+    // Watch yourself come off for a beat -- that's the feedback for *why* you
+    // fell -- then straight back to the menu, carrying the result with you.
     game.fallTimer += dt;
-    if (game.fallTimer > T.FALL_LINGER) game.state = 'fallen';
+    if (game.fallTimer > T.FALL_LINGER) {
+      game.last = {
+        level: game.level,
+        reason: game.fallReason,
+        height: Math.round(game.bestHeight),
+      };
+      game.showMenu();
+    }
   }
 
   // camera follow

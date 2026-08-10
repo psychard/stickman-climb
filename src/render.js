@@ -5,22 +5,192 @@
  * not decoration.
  */
 
-import { T, lerp, clamp01 } from './tuning.js';
+import { T, levelAt, lerp, clamp, clamp01 } from './tuning.js';
 import { LIMB_IDS, torsoFrame, anchorOf, specFor, ikJoint, centerOfMass } from './body.js';
 import { holdsInRange } from './wall.js';
 
-const DEBUG_BTN = { w: 44, h: 30 };
+// HUD buttons sit in a row under the stamina bar, hence the vertical offset.
+const HUD_BTN = { w: 44, h: 30, top: 32, gap: 8 };
 
 export function debugButtonRect(view) {
   return {
-    x: view.ox + view.playW - DEBUG_BTN.w - 10 - view.safe.right,
-    y: 10 + view.safe.top,
-    w: DEBUG_BTN.w,
-    h: DEBUG_BTN.h,
+    x: view.ox + view.playW - HUD_BTN.w - 10 - view.safe.right,
+    y: HUD_BTN.top + view.safe.top,
+    w: HUD_BTN.w,
+    h: HUD_BTN.h,
   };
 }
 
+/**
+ * Back to the level list. Without it the menu is a one-way door -- you could only
+ * reach it again by falling off, which on a phone means reloading the page to
+ * give up on a wall.
+ */
+export function menuButtonRect(view) {
+  const b = debugButtonRect(view);
+  return { x: b.x - HUD_BTN.w - HUD_BTN.gap, y: b.y, w: HUD_BTN.w, h: b.h };
+}
+
+export function hitsRect(r, pt) {
+  return pt.x >= r.x && pt.x <= r.x + r.w && pt.y >= r.y && pt.y <= r.y + r.h;
+}
+
+// --------------------------------------------------------------------------
+// menu
+// --------------------------------------------------------------------------
+
+const MENU = {
+  pad: 18,
+  gap: 9,
+  header: 104, // title + last-attempt line
+  footer: 26,
+  rowMin: 50, // never smaller than a comfortable thumb target
+  rowMax: 86,
+};
+
+/**
+ * Row rectangles for the level list, in screen space.
+ *
+ * Laid out from the view rather than from a fixed design size, because the same
+ * menu has to work in a 400pt portrait phone column and in a letterboxed desktop
+ * window. Hit testing and drawing both read this, so they can't disagree.
+ */
+export function menuRects(view) {
+  const left = view.ox + view.safe.left + MENU.pad;
+  const right = view.ox + view.playW - view.safe.right - MENU.pad;
+  const w = right - left;
+
+  const availTop = view.safe.top + MENU.header;
+  const availH = view.h - availTop - view.safe.bottom - MENU.footer;
+  const n = T.LEVELS.length;
+  const rowH = clamp((availH - MENU.gap * (n - 1)) / n, MENU.rowMin, MENU.rowMax);
+  const blockH = rowH * n + MENU.gap * (n - 1);
+  const top = availTop + Math.max(0, (availH - blockH) / 2);
+
+  return T.LEVELS.map((_, i) => ({
+    x: left,
+    y: top + i * (rowH + MENU.gap),
+    w,
+    h: rowH,
+  }));
+}
+
+/** Index of the level row under `pt`, or null. */
+export function menuHit(view, pt) {
+  const rects = menuRects(view);
+  for (let i = 0; i < rects.length; i++) {
+    if (hitsRect(rects[i], pt)) return i;
+  }
+  return null;
+}
+
+/** Green through red across the five levels, so the ladder reads at a glance. */
+function levelColor(i) {
+  const t = i / Math.max(1, T.LEVELS.length - 1);
+  return t < 0.5
+    ? mixColor(T.COL.stamHi, T.COL.stamMid, t * 2)
+    : mixColor(T.COL.stamMid, T.COL.stamLo, (t - 0.5) * 2);
+}
+
+function drawMenu(ctx, game) {
+  const { view } = game;
+  const left = view.ox + view.safe.left + MENU.pad;
+  const cx = view.ox + view.playW / 2;
+
+  ctx.fillStyle = '#06070a';
+  ctx.fillRect(0, 0, view.w, view.h);
+  const g = ctx.createLinearGradient(0, 0, 0, view.h);
+  g.addColorStop(0, T.COL.bg1);
+  g.addColorStop(1, T.COL.bg0);
+  ctx.fillStyle = g;
+  ctx.fillRect(view.ox, 0, view.playW, view.h);
+
+  // ------------------------------------------------------------------ header
+  const top = view.safe.top + MENU.pad;
+  ctx.textAlign = 'left';
+  ctx.font = '600 26px ui-monospace, monospace';
+  ctx.fillStyle = T.COL.text;
+  ctx.fillText('CLIMB', left, top + 24);
+
+  ctx.font = '12px ui-monospace, monospace';
+  ctx.fillStyle = T.COL.textDim;
+  ctx.fillText('pick a wall', left, top + 44);
+
+  // Result of the attempt that sent you back here. This is the only reason the
+  // menu doubles as the fall screen -- you land back on the list already knowing
+  // why you came off and how high you got.
+  if (game.last) {
+    const lvl = levelAt(game.last.level);
+    ctx.font = '12px ui-monospace, monospace';
+    ctx.fillStyle = T.COL.stamLo;
+    ctx.fillText(game.last.reason, left, top + 70);
+    ctx.fillStyle = T.COL.textDim;
+    ctx.fillText(
+      `on ${game.last.level + 1} ${lvl.name} at ${game.last.height}`,
+      left,
+      top + 86,
+    );
+  }
+
+  // ------------------------------------------------------------------- rows
+  const rects = menuRects(view);
+  rects.forEach((r, i) => {
+    const lvl = T.LEVELS[i];
+    const picked = game.state === 'building' && game.level === i;
+    const col = levelColor(i);
+
+    ctx.fillStyle = picked ? 'rgba(255,209,102,0.18)' : 'rgba(255,255,255,0.05)';
+    roundRect(ctx, r.x, r.y, r.w, r.h, 10);
+    ctx.fill();
+    ctx.strokeStyle = picked ? T.COL.inRange : 'rgba(255,255,255,0.09)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, 10);
+    ctx.stroke();
+
+    // number, in the level's own colour
+    ctx.textAlign = 'center';
+    ctx.font = '600 22px ui-monospace, monospace';
+    ctx.fillStyle = col;
+    ctx.fillText(String(i + 1), r.x + 26, r.y + r.h / 2 + 8);
+
+    ctx.textAlign = 'left';
+    ctx.font = '600 14px ui-monospace, monospace';
+    ctx.fillStyle = T.COL.text;
+    ctx.fillText(lvl.name, r.x + 50, r.y + r.h / 2 - 3);
+    ctx.font = '11px ui-monospace, monospace';
+    ctx.fillStyle = T.COL.textDim;
+    ctx.fillText(picked ? 'building wall...' : lvl.blurb, r.x + 50, r.y + r.h / 2 + 14);
+
+    // difficulty pips
+    const pipR = 3;
+    const pipGap = 9;
+    const pipX = r.x + r.w - 14 - pipGap * (T.LEVELS.length - 1);
+    for (let p = 0; p < T.LEVELS.length; p++) {
+      ctx.beginPath();
+      ctx.arc(pipX + p * pipGap, r.y + r.h / 2, pipR, 0, Math.PI * 2);
+      ctx.fillStyle = p <= i ? col : 'rgba(255,255,255,0.12)';
+      ctx.fill();
+    }
+  });
+
+  // ------------------------------------------------------------------ footer
+  ctx.textAlign = 'center';
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.fillStyle = T.COL.textDim;
+  ctx.fillText(
+    'drag hands and feet onto holds  ·  tap a limb to let go',
+    cx,
+    view.h - view.safe.bottom - 10,
+  );
+  ctx.textAlign = 'left';
+}
+
 export function draw(ctx, game) {
+  if (game.state === 'menu' || game.state === 'building') {
+    drawMenu(ctx, game);
+    return;
+  }
+
   const { view, wall, fig, stam, cam } = game;
   const s = view.scale;
   const w = view.w;
@@ -248,16 +418,24 @@ function drawHud(ctx, game) {
   ctx.fillStyle = net > 0 ? T.COL.stamLo : T.COL.stamHi;
   ctx.fillText(net > 0 ? '▼' : '▲', left + barW + 6, top + barH);
 
-  // debug toggle button
-  const b = debugButtonRect(view);
-  ctx.fillStyle = game.debug ? 'rgba(255,209,102,0.22)' : 'rgba(255,255,255,0.07)';
-  roundRect(ctx, b.x, b.y + 22, b.w, b.h, 6);
-  ctx.fill();
-  ctx.fillStyle = game.debug ? T.COL.inRange : T.COL.textDim;
+  // hud buttons: back to the level list, and the debug overlay toggle
+  const hudBtn = (r, label, on) => {
+    ctx.fillStyle = on ? 'rgba(255,209,102,0.22)' : 'rgba(255,255,255,0.07)';
+    roundRect(ctx, r.x, r.y, r.w, r.h, 6);
+    ctx.fill();
+    ctx.fillStyle = on ? T.COL.inRange : T.COL.textDim;
+    ctx.font = '11px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + 4);
+    ctx.textAlign = 'left';
+  };
+  hudBtn(menuButtonRect(view), 'menu', false);
+  hudBtn(debugButtonRect(view), 'dbg', game.debug);
+
+  // which wall you're on
   ctx.font = '11px ui-monospace, monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText('dbg', b.x + b.w / 2, b.y + 22 + b.h / 2 + 4);
-  ctx.textAlign = 'left';
+  ctx.fillStyle = T.COL.textDim;
+  ctx.fillText(`${wall.level + 1} ${levelAt(wall.level).name}`, left, top + barH + 18);
 
   if (game.debug) {
     const lines = [
@@ -270,28 +448,13 @@ function drawHud(ctx, game) {
       `planted ${stam.planted}   stamina ${stam.value.toFixed(2)}`,
       `fps ${game.fps.toFixed(0)}  upd ${game.msUpdate.toFixed(2)}ms  ren ${game.msRender.toFixed(2)}ms`,
       `holds ${wall.stats.total} (${wall.stats.route} route)`,
-      `seed ${wall.seed}`,
+      `level ${wall.level + 1} ${levelAt(wall.level).name}  seed ${wall.seed}`,
     ];
     ctx.font = '11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    ctx.fillRect(left - 4, top + 26, 210, lines.length * 14 + 8);
+    ctx.fillRect(left - 4, top + 44, 210, lines.length * 14 + 8);
     ctx.fillStyle = T.COL.text;
-    lines.forEach((l, i) => ctx.fillText(l, left, top + 42 + i * 14));
-  }
-
-  if (game.state === 'fallen') {
-    const cx = view.ox + view.playW / 2;
-    ctx.fillStyle = 'rgba(8,10,14,0.72)';
-    ctx.fillRect(view.ox, 0, view.playW, view.h);
-    ctx.fillStyle = T.COL.text;
-    ctx.textAlign = 'center';
-    ctx.font = '22px ui-monospace, monospace';
-    ctx.fillText(game.fallReason, cx, view.h / 2 - 10);
-    ctx.font = '13px ui-monospace, monospace';
-    ctx.fillStyle = T.COL.textDim;
-    ctx.fillText(`height ${game.bestHeight | 0}`, cx, view.h / 2 + 16);
-    ctx.fillText('tap to try again', cx, view.h / 2 + 40);
-    ctx.textAlign = 'left';
+    lines.forEach((l, i) => ctx.fillText(l, left, top + 60 + i * 14));
   }
 }
 
