@@ -67,6 +67,23 @@ Testing on a phone is via `ngrok http 5173`. `vite.config.js` sets
 `server.allowedHosts` for ngrok domains — Vite rejects unknown `Host` headers, so
 removing those entries makes the tunnel 502 while localhost keeps working.
 
+## Deploying
+
+Pushing to `main` publishes to <https://psychard.github.io/stickman-climb/> via
+`.github/workflows/pages.yml` (npm ci → `verify` → `build` → upload → deploy).
+The Pages source is set to "GitHub Actions", not deploy-from-branch, so there is
+no `gh-pages` branch and nothing to commit — `dist/` stays gitignored.
+
+**Pages serves a project site under `/<repo>/`, so `base` must be
+`/stickman-climb/` for the build**, or every asset 404s on the deployed site
+while working perfectly on localhost. `vite.config.js` keys that off
+`command === 'build' || isPreview`, and the `isPreview` half is not optional:
+`vite preview` reports `command === 'serve'` exactly like the dev server, so
+without it preview serves the built HTML at `/` while that HTML asks for
+`/stickman-climb/assets/…` and 404s — i.e. the one command meant to rehearse the
+deploy fails in a way the deploy doesn't, and vice versa. Dev stays at `/` so the
+ngrok URL needs no subpath. If the repo is ever renamed, this constant moves too.
+
 ## Layout
 
 | File | Role |
