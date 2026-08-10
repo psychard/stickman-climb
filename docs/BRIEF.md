@@ -193,15 +193,37 @@ of the ladder (0.79 → 0.15, rests 40% → 5%).
 carrying the reason and height, rather than showing a retry overlay, so a retry is
 one tap and switching walls is the same tap.
 
+### 2026-08-09 — the body could be dragged into impossible shapes
+
+Reported from play: the figure could be stretched into weird unphysical
+configurations. Reproduced by fuzzing multi-limb drags, which found a 208u leg, an
+inverted torso and pose violations of 180u. Four causes, all measured:
+
+**The drag lunge was unbounded** — it multiplies the shortfall between pointer and
+reach, so hauling a limb to three times its length asked for ~880 units of body
+travel in a single 1/120s substep. **Pose was measured against the raw pointer**,
+so a pointer flung across the wall shoved the body by that distance at full
+strength. **The torso could invert**, which mirrors every anatomical limit because
+the cones live in the torso frame, so they then held the figure in impossible
+shapes rather than out of them. And **reach did not actually get the last word**
+despite the design saying it should, because every projection pass ended with pose
+and torso corrections applied after the clamps.
+
+**A stance can be entered that no body can hold.** Checking that one limb can
+reach one hold is not enough: plant four limbs one at a time, each legal when
+taken, and the body moves between grabs until the combination is impossible. The
+solver was returning the best available answer and the best available answer was a
+99u leg. Grabs are now refused if the resulting stance has no solution, the same
+check the generator already applies to every hold it places. This is the brief's
+existing "the grab simply fails" rule, applied to the stance rather than the limb.
+
+The solver can still settle in a bad local minimum, so `escapeWedge` detects that
+and migrates the body toward the globally-solved answer. Together these took the
+adversarial fuzzer from 254 bad runs in 300 to 1, and the auto-climber from failing
+every level to passing all five over the full route.
+
 ### Still open
 
-- The live solver sometimes wedges a planted limb past its max reach and never
-  recovers, so a leg stays visibly over-extended. It affects ~0.5% of settled
-  frames and `npm run sim`, which asserts on the worst frame in a run, currently
-  fails 4 of the 5 levels on it. It is pre-existing, and measurement says neither
-  the levels nor hold reuse made it more likely. It is the main thing standing
-  between these walls and being properly shippable. CLAUDE.md has a repro and the
-  hypotheses already falsified.
 - Holds are still a direction-free quality scalar. No underclings, sidepulls or
   slopers that only work when pulled a particular way. Deferred deliberately.
 - Fatigue is still one global bar, though strain is now computed per limb, so

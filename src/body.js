@@ -5,24 +5,27 @@
  * torso length. Everything else (shoulder positions, hip sockets) is derived
  * from those two points, so the torso leaning and rotating falls out for free.
  *
- * Each substep applies the external inputs ONCE -- gravity sag, then the drag
- * lunge -- and then relaxes a small set of positional constraints (Gauss-Seidel,
- * so later constraints win):
+ * Each substep applies the external inputs ONCE -- gravity sag, the drag lunge,
+ * and the wedge escape -- and then relaxes a small set of positional constraints
+ * (Gauss-Seidel, so later constraints win):
  *
  *   1. planted feet PUSH the body up off their hold (legs are struts, one-sided)
  *   2. planted limbs CLAMP the body inside their reach envelope
  *   3. POSE CONES keep each limb anatomically plausible against the torso
- *   4. the torso keeps its length
+ *   4. the torso keeps its length and stays within TORSO_TILT_MAX of vertical
  *   5. a weak bias keeps the chest above the hip
  *
- * ...and finally projectReach() enforces reach + pose + torso strictly, so the
- * envelope gets the last word. See CLAUDE.md for why the drag must not live
- * inside the relaxation loop, and why reach and pose must be projected together.
+ * ...then projectReach() enforces reach + pose + torso strictly, and finishes with
+ * reach-only sweeps so the envelope genuinely gets the last word. See CLAUDE.md
+ * for why the drag must not live inside the relaxation loop, why reach and pose
+ * must be projected together, and why every external input has to be bounded.
  *
  * A dragged limb never stretches past its max reach: the pointer pulls the body,
  * and if the body can't get there the grab just fails. Nothing is ever peeled
  * off a hold automatically -- a planted limb limits you, and the player taps it
- * to let go.
+ * to let go. And a grab is refused outright if the resulting four-hold stance has
+ * no solution (stanceSolvable), because otherwise the solver is asked for a body
+ * position that does not exist and returns something visibly broken.
  */
 
 import { T, clamp } from './tuning.js';
@@ -236,6 +239,29 @@ export function softReach(d, max) {
 // the solver
 // --------------------------------------------------------------------------
 
+/**
+ * The point the pose cone should be measured against.
+ *
+ * For a planted limb that's the hold. For a dragged one it is NOT the raw pointer
+ * position: the correction is proportional to how far outside the cone the point
+ * sits, so a pointer flung 300u across the wall shoves the body by 300u at full
+ * strength, every pass, and the reach clamps cannot win against it. The direction
+ * is what carries the intent -- pointing across your body should still rotate the
+ * torso -- so keep that and limit the distance to somewhere the limb could
+ * plausibly reach.
+ */
+function poseTarget(state, limb) {
+  if (!limb.drag) return limb.hold;
+  const a = anchorOf(state.hip, state.chest, limb);
+  const spec = specFor(limb.kind);
+  const dx = limb.drag.target.x - a.x;
+  const dy = limb.drag.target.y - a.y;
+  const d = Math.hypot(dx, dy);
+  const cap = spec.max + T.REACH_STRETCH;
+  if (d <= cap || d < 1e-6) return limb.drag.target;
+  return { x: a.x + (dx / d) * cap, y: a.y + (dy / d) * cap };
+}
+
 /** Move a limb's anchor by (dx,dy), distributing it across hip and chest. */
 function pushAnchor(state, limb, dx, dy) {
   const near = T.ANCHOR_SPLIT_NEAR;
@@ -286,13 +312,68 @@ function projectReach(state, limbs, passes = T.PROJECT_PASSES) {
     // a settled 10.7u pose violation that was completely independent of how hard
     // the drag was pulling.
     for (const limb of limbs) {
-      const pt = limb.drag ? limb.drag.target : limb.hold;
+      const pt = poseTarget(state, limb);
       if (!pt) continue;
       const c = poseCorrection(state, limb, pt);
       if (c.x !== 0 || c.y !== 0) pushAnchor(state, limb, c.x, c.y);
     }
     enforceTorso(state);
+    enforceTilt(state);
   }
+
+  // ...and then reach genuinely gets the last word. Every pass above ends with
+  // pose, torso and tilt, all of which move the body AFTER the clamps ran, so the
+  // loop alone can leave a planted limb over-stretched however many passes it
+  // gets -- which is a rubber limb, drawn straight from socket to hold. These
+  // final sweeps re-close the envelope with only the torso kept valid alongside
+  // it. Pose has already had its passes; over-stretch is the violation that reads
+  // as the game being broken, so it wins the tie.
+  for (let i = 0; i < T.REACH_FINAL_PASSES; i++) {
+    for (const limb of limbs) {
+      if (!limb.hold || limb.drag) continue;
+      const a = anchorOf(state.hip, state.chest, limb);
+      const spec = specFor(limb.kind);
+      const dx = limb.hold.x - a.x;
+      const dy = limb.hold.y - a.y;
+      const d = Math.hypot(dx, dy) || 1e-6;
+      if (d > spec.max) {
+        const move = d - spec.max;
+        pushAnchor(state, limb, (dx / d) * move, (dy / d) * move);
+      }
+    }
+    enforceTorso(state);
+    enforceTilt(state);
+  }
+}
+
+/**
+ * Keep the torso within TORSO_TILT_MAX of vertical, rotating about its midpoint
+ * so the body doesn't translate.
+ *
+ * This is a hard constraint and not decoration. The pose cones are defined in the
+ * torso frame, so if the chest passes under the hip every anatomical limit
+ * mirrors: a foot "below the hip" in torso space is above it in the world, and
+ * the cones start actively holding the figure in impossible shapes instead of out
+ * of them. UPRIGHT_STIFF is a 0.012 bias and a hard drag overwhelms it easily.
+ * Only used on the wall -- a falling figure is free to tumble.
+ */
+function enforceTilt(state) {
+  const dx = state.chest.x - state.hip.x;
+  const dy = state.chest.y - state.hip.y;
+  const len = Math.hypot(dx, dy) || 1e-6;
+  const maxTilt = (T.TORSO_TILT_MAX * Math.PI) / 180;
+  // signed angle of hip->chest away from straight up; y grows downward
+  const ang = Math.atan2(dx, -dy);
+  if (Math.abs(ang) <= maxTilt) return;
+  const a = clamp(ang, -maxTilt, maxTilt);
+  const mx = (state.hip.x + state.chest.x) / 2;
+  const my = (state.hip.y + state.chest.y) / 2;
+  const hx = (Math.sin(a) * len) / 2;
+  const hy = (-Math.cos(a) * len) / 2;
+  state.hip.x = mx - hx;
+  state.hip.y = my - hy;
+  state.chest.x = mx + hx;
+  state.chest.y = my + hy;
 }
 
 function enforceTorso(state) {
@@ -322,6 +403,19 @@ function enforceTorso(state) {
  * upward is muscular work.
  */
 function applyDragPull(state, limbs) {
+  // The shortfall is unbounded -- a pointer dragged to three times a limb's reach
+  // asks for hundreds of units of body travel in a single 1/120s substep (measured
+  // 555u), which hands the solver a wrecked configuration to recover from, and
+  // from some of them it cannot. That is what let a planted limb sit 200u past its
+  // length and the torso invert.
+  //
+  // The cap is on the BODY, not on each pointer: there is one body and it has one
+  // speed limit, so three fingers cannot haul it three times as fast. Contributions
+  // are gathered, then scaled down together if they add up to more than one
+  // substep's worth of travel. Normal play peaks at 66u, so this never binds
+  // during ordinary climbing.
+  const pulls = [];
+  let total = 0;
   for (const limb of limbs) {
     if (!limb.drag) continue;
     const a = anchorOf(state.hip, state.chest, limb);
@@ -329,12 +423,15 @@ function applyDragPull(state, limbs) {
     const dx = limb.drag.target.x - a.x;
     const dy = limb.drag.target.y - a.y;
     const d = Math.hypot(dx, dy);
-    if (d > spec.max * T.LUNGE_START && d > 1e-6) {
-      const move = (d - spec.max * T.LUNGE_SETTLE) * T.DRAG_PULL;
-      const cy = (dy / d) * move;
-      pushAnchor(state, limb, (dx / d) * move, cy < 0 ? cy * T.DRAG_LIFT : cy);
-    }
+    if (d <= spec.max * T.LUNGE_START || d <= 1e-6) continue;
+    const move = (d - spec.max * T.LUNGE_SETTLE) * T.DRAG_PULL;
+    const cy = (dy / d) * move;
+    const pull = { limb, x: (dx / d) * move, y: cy < 0 ? cy * T.DRAG_LIFT : cy };
+    total += Math.hypot(pull.x, pull.y);
+    pulls.push(pull);
   }
+  const scale = total > T.DRAG_MAX_STEP ? T.DRAG_MAX_STEP / total : 1;
+  for (const p of pulls) pushAnchor(state, p.limb, p.x * scale, p.y * scale);
 }
 
 /** One relaxation pass over all constraints. Mutates state.hip / state.chest. */
@@ -385,7 +482,7 @@ function relaxOnce(state, limbs) {
   //    torso, so feet can't end up above the chest and limbs can't wrap across
   //    the body. Acts on the body, since the hold itself is fixed.
   for (const limb of limbs) {
-    const pt = limb.drag ? limb.drag.target : limb.hold;
+    const pt = poseTarget(state, limb);
     if (!pt) continue;
     const c = poseCorrection(state, limb, pt);
     if (c.x !== 0 || c.y !== 0) {
@@ -393,8 +490,9 @@ function relaxOnce(state, limbs) {
     }
   }
 
-  // 5. torso keeps its length
+  // 5. torso keeps its length, and its orientation stays interpretable
   enforceTorso(state);
+  enforceTilt(state);
 
   // 6. weak upright bias so the figure reads as a person, not a ragdoll
   {
@@ -443,6 +541,7 @@ export function stepFigure(fig, dt) {
 
   // external inputs first, then let the constraints resolve them
   applyDragPull(fig, limbs);
+  escapeWedge(fig, limbs, dt);
   for (let i = 0; i < T.ITERATIONS; i++) relaxOnce(fig, limbs);
   projectReach(fig, limbs);
 
@@ -455,6 +554,82 @@ export function stepFigure(fig, dt) {
   fig.chestV.y = (fig.chest.y - prevChest.y) * f;
 
   placeEndpoints(fig, limbs);
+}
+
+/**
+ * Escape a wedged stance.
+ *
+ * The relaxation is local and path-dependent, so it has more than one stable
+ * answer for the same set of holds and can settle in a bad one -- most visibly a
+ * torso leaning the wrong way, which reads every pose cone mirrored and leaves a
+ * foot apparently up by the head. It is a fixed point, not slow convergence:
+ * measured unchanged after 1.33s of settling, and more projection passes don't
+ * touch it.
+ *
+ * But `solveStatic` seeds from the hold centroids rather than from the current
+ * body, so it finds the *global* answer -- on the repro above it returned a 0.00u
+ * solution while the live body sat wedged at a 61u pose violation. So when we are
+ * demonstrably stuck and a genuinely better answer exists, migrate toward it.
+ *
+ * Only runs with nothing being dragged: mid-drag the body is supposed to be
+ * hauled somewhere awkward, and this would fight the player. And it moves at a
+ * bounded rate, so recovery reads as the figure settling rather than teleporting.
+ *
+ * Applied as an external displacement BEFORE the relaxation, alongside gravity and
+ * the drag -- not after it. Nudging the body after the constraints have run just
+ * gets undone by the next substep's solve, which pulls straight back into the same
+ * wedge; moving first lets the solver resolve from the better basin, and leaves it
+ * to restore the torso length rather than breaking it.
+ */
+function escapeWedge(fig, limbs, dt) {
+  if (limbs.some((l) => l.drag)) return;
+
+  const pts = {};
+  let worst = 0;
+  let n = 0;
+  for (const limb of limbs) {
+    if (!limb.hold) continue;
+    pts[limb.id] = limb.hold;
+    n++;
+    const a = anchorOf(fig.hip, fig.chest, limb);
+    const d = Math.hypot(limb.hold.x - a.x, limb.hold.y - a.y);
+    worst = Math.max(
+      worst,
+      d - specFor(limb.kind).max,
+      poseViolation(fig.hip, fig.chest, limb, limb.hold),
+    );
+  }
+  if (n === 0 || worst < T.WEDGE_TRIGGER) return;
+
+  const sol = solveStatic(pts);
+  // only move if the global answer is meaningfully better than where we are
+  if (sol.violation > worst - T.WEDGE_TRIGGER) return;
+
+  // Move the midpoint, but ROTATE the torso rather than interpolating its two
+  // ends. The wedged answer and the good one are usually mirrored -- the chest
+  // sits the opposite side of the hip -- and lerping the endpoints between those
+  // passes through a zero-length torso, which enforceTorso then re-expands in
+  // whichever direction it likes, normally straight back into the wedge. Turning
+  // the torso through the intervening angle is the motion that actually gets
+  // there, and it looks like the figure rolling over rather than collapsing.
+  const k = Math.min(1, T.WEDGE_RECOVER * dt);
+  const mid = { x: (fig.hip.x + fig.chest.x) / 2, y: (fig.hip.y + fig.chest.y) / 2 };
+  const solMid = { x: (sol.hip.x + sol.chest.x) / 2, y: (sol.hip.y + sol.chest.y) / 2 };
+  const ang = Math.atan2(fig.chest.x - fig.hip.x, -(fig.chest.y - fig.hip.y));
+  const solAng = Math.atan2(sol.chest.x - sol.hip.x, -(sol.chest.y - sol.hip.y));
+  let dAng = solAng - ang;
+  while (dAng > Math.PI) dAng -= Math.PI * 2; // shortest way round
+  while (dAng < -Math.PI) dAng += Math.PI * 2;
+
+  const nx = mid.x + (solMid.x - mid.x) * k;
+  const ny = mid.y + (solMid.y - mid.y) * k;
+  const na = ang + dAng * k;
+  const hx = (Math.sin(na) * T.TORSO_LEN) / 2;
+  const hy = (-Math.cos(na) * T.TORSO_LEN) / 2;
+  fig.hip.x = nx - hx;
+  fig.hip.y = ny - hy;
+  fig.chest.x = nx + hx;
+  fig.chest.y = ny + hy;
 }
 
 /** Position the visible limb endpoints from the solved body. */
@@ -572,6 +747,31 @@ export function solveStatic(pts, iters = T.GEN_SOLVE_ITERS) {
  * Is this four-point stance one the figure can actually hold? Used by the
  * generator to guarantee every wall it emits is climbable.
  */
+/**
+ * Is there ANY body position that holds this set of holds?
+ *
+ * `canReach` only asks whether one limb can get to one hold from where the body
+ * is now. That is not enough to keep the figure coherent: plant four limbs one at
+ * a time, each legal when it was taken, and the body can move between grabs until
+ * the combination is one no body can hold. The solver then does the best possible
+ * and the best possible is visibly broken -- a leg drawn 99u long, a foot up by
+ * the head. Measured: `solveStatic` returned an 84.7u violation on a stance a
+ * player reached by dragging, and its answer was identical to the live body's, so
+ * there was nothing left to fix downstream.
+ *
+ * So the game gates planting on this, the same way the generator gates placing a
+ * hold. It keeps the invariant that the current stance is always solvable, which
+ * holds inductively: releasing a limb only removes constraints, and dragging moves
+ * the body but not the holds.
+ *
+ * Unlike `stanceFeasible` this asks only whether the stance is *possible*, not
+ * whether it looks sensible -- the crossed-limb and hands-above-feet rules are
+ * the generator's taste and shouldn't veto what a player does deliberately.
+ */
+export function stanceSolvable(pts) {
+  return solveStatic(pts).violation <= T.PLANT_MAX_VIOLATION;
+}
+
 export function stanceFeasible(pts) {
   // no crossed limbs, and hands must stay above feet -- geometrically possible
   // stances that read as absurd are still rejected

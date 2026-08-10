@@ -71,7 +71,19 @@ export const T = {
   UPRIGHT_STIFF: 0.012, // weak bias keeping the chest above the hip
   FOOT_PUSH_STIFF: 0.22, // legs pressing the body up off a foothold
   CLAMP_STIFF: 1.0, // hard min/max reach clamps (planted limbs tether here)
-  PROJECT_PASSES: 6, // strict reach projection after relaxation; see projectReach
+  PROJECT_PASSES: 16, // strict reach projection after relaxation; see projectReach
+  // Reach-only sweeps after those, so the envelope is genuinely the last thing
+  // enforced. Without them every projection pass ends with pose/torso/tilt moving
+  // the body after the clamps ran, and a planted limb can be left over-stretched
+  // no matter how many passes it gets -- drawn as a rubber limb.
+  REACH_FINAL_PASSES: 4,
+  // The relaxation is local, so it has more than one stable answer per stance and
+  // can settle in a bad one -- see escapeWedge. Past this much violation, with
+  // nothing being dragged, the body migrates toward solveStatic's global answer at
+  // WEDGE_RECOVER per second. Trigger is well above the ~0.6u of ordinary solver
+  // noise; the rate is fast enough to look like settling, slow enough not to snap.
+  WEDGE_TRIGGER: 2.0,
+  WEDGE_RECOVER: 90,
   // Applied once per substep (see applyDragPull), so this is much larger than a
   // per-iteration stiffness would be. Counterintuitively, stronger is better on
   // every axis: the body reaches the boundary its planted limbs allow within a
@@ -96,6 +108,21 @@ export const T = {
   // while dropping that to ~2.5%. Feet staying on is worth the 2%.
   LUNGE_START: 1.0,
   LUNGE_SETTLE: 0.84,
+  // Hard ceiling on how far one dragged limb may displace the body in a single
+  // substep. DRAG_PULL multiplies the *shortfall*, which is unbounded: drag a
+  // limb to 3x its reach and the lunge asks for 880 units of body travel in one
+  // 1/120s step. The constraints usually claw that back within the substep --
+  // measured 555u right after the drag, 0u after projection -- but from some
+  // configurations they cannot, and that is what let a planted limb sit 200u
+  // past its length and the torso invert. Normal play peaks at 66u/substep, so
+  // this bounds the pathological case without touching the intended feel.
+  DRAG_MAX_STEP: 110,
+  // Hard cap on torso tilt from vertical, degrees. The pose cones live in the
+  // torso frame, so an inverted torso mirrors every anatomical limit and they
+  // stop meaning anything -- a foot "below the hip" in torso space is above it in
+  // the world. Normal play reaches 46 degrees, so this is slack in practice and
+  // exists only to keep the frame interpretable.
+  TORSO_TILT_MAX: 72,
 
   // Elasticity in reach: past max the limb keeps moving, but with exponential
   // resistance, asymptotically capped at max + REACH_STRETCH. Tight, on purpose.
@@ -107,6 +134,12 @@ export const T = {
   GRAB_RADIUS: 42, // how close a pointer must land to pick up a limb
   SNAP_RADIUS: 34, // how close the limb endpoint must be to a hold to plant
   PLANT_TOLERANCE: 1.0, // multiple of max reach still allowed to plant
+  // A grab is refused if the resulting four-hold stance has no solution at all --
+  // see stanceSolvable. Legal stances settle at ~0-0.6u, and the configurations
+  // this exists to reject sit tens of units out, so this only has to clear solver
+  // noise. The brief already says an unreachable grab simply fails; this is the
+  // same rule applied to the stance as a whole rather than to one limb.
+  PLANT_MAX_VIOLATION: 2.0,
   // A touch that never travels this far is a tap, which releases the limb.
   // Small enough that a tap is deliberate, large enough that a thumb resting on
   // a limb doesn't start dragging it.
@@ -115,7 +148,7 @@ export const T = {
   // How decisive the outboard test must be before a joint may switch bend side.
   // Near zero the limb is pointing sideways and the test is meaningless, so the
   // previous side is kept -- otherwise knees snap mid-move.
-  BEND_HYSTERESIS: 0.3,
+  BEND_HYSTERESIS: 0.78,
 
   // ---------------------------------------------------------------- stamina ---
   // Strain is a single 0..~2 scalar built from three signals. Below REST_STRAIN
@@ -125,10 +158,10 @@ export const T = {
   W_BALANCE: 0.45,
   W_ARMLOAD: 0.45, // cost of simply having weight on your arms
   // Calibrated against the measured spread of real route stances on level 1,
-  // which runs p25 0.30 / median 0.37 / p90 0.63. Sitting at the p25 means roughly
-  // the best quarter of positions on the wall offer a rest, so you have to hunt
-  // for them. Harder levels get far fewer by design (4% of stances on level 5).
-  // Re-measure with tools/ if the strain terms change.
+  // which runs p25 0.27 / median 0.36 / p90 0.59, so roughly the best third of
+  // positions on the wall offer a rest and you have to hunt for them. Harder
+  // levels get far fewer by design (4% of stances on level 5). Re-measure with
+  // tools/ if the strain terms change.
   REST_STRAIN: 0.3,
 
   DRAIN_RATE: 0.16, // stamina/sec per unit of net strain
@@ -196,11 +229,11 @@ export const T = {
   // and how many moves it makes before pumping out:
   //
   //   lvl  floor  holds/100u  hold q  choices  stuck  rests  climbed  moves
-  //    1    0.00      8.8       0.79     10.7   0.38    40%    1809u   153
-  //    2    0.20      7.7       0.66      9.7   0.38    33%    1621u   127
-  //    3    0.45      6.3       0.50      7.0   0.47    17%    1391u    97
-  //    4    0.70      5.4       0.33      5.7   0.82     8%     987u    62
-  //    5    1.00      4.1       0.15      4.0   1.09     5%     799u    50
+  //    1    0.00      9.0       0.79     11.0   0.18    44%    2107u   179
+  //    2    0.20      7.7       0.65      9.3   0.38    42%    1728u   134
+  //    3    0.45      6.2       0.49      7.0   0.56    21%    1442u   100
+  //    4    0.70      5.2       0.34      5.3   0.93     9%    1074u    67
+  //    5    1.00      4.2       0.16      4.0   1.22     4%     894u    49
   //
   // `choices` is how many legal moves a stance offers and `stuck` how many of the
   // four limbs have none. Level 5 averages more than one limb with nowhere to go,

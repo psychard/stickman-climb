@@ -17,6 +17,7 @@ import {
   createFigure,
   stepFigure,
   canReach,
+  stanceSolvable,
   anchorOf,
   specFor,
   poseViolation,
@@ -187,22 +188,19 @@ function climb(seed, level, maxMoves = 400) {
   let minStamina = 1;
   let pumpedAt = 0;
 
-  // The run stops when the harness pumps out, which is what bounds how much of
-  // each wall gets exercised -- hard levels are therefore checked over far fewer
-  // moves than easy ones (see `pumpedAt`). Pass a `maxMoves` and comment this out
-  // to walk the whole route instead; note that doing so currently trips the
-  // settled-leg-stretch assertion on every level, including level 1 above ~2000u,
-  // via a pre-existing local-minimum deadlock in the live solver. See CLAUDE.md.
+  // Running out of stamina does NOT stop the run. It used to, and that capped
+  // coverage at move 44 on level 5 -- far too few moves for a 90% plant-rate
+  // assertion, since a single extra miss moves it 2%, and it hid a solver wedge
+  // that only appeared deeper in. This harness never rests, so pumping out is an
+  // artefact of the harness rather than a mechanics failure; `pumpedAt` records
+  // where it happened and `npm run ladder` is what measures survivability.
   for (const mv of route.slice(0, maxMoves)) {
     const limb = fig.limbs[mv.limb];
     if (attemptMove(fig, stam, wall, limb, mv.hold, watch)) planted++;
     else missed++;
 
     minStamina = Math.min(minStamina, stam.value);
-    if (stam.value <= 0) {
-      pumpedAt = planted + missed;
-      break;
-    }
+    if (stam.value <= 0 && !pumpedAt) pumpedAt = planted + missed;
   }
 
   const moves = planted + missed;

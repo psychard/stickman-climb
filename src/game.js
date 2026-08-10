@@ -26,6 +26,10 @@
  *  - Snapping is tested against the limb's *solved* endpoint, which is already
  *    clamped to max reach. So a hold you can't reach simply can't be taken, no
  *    matter how far past it you drag.
+ *  - A grab is also refused if the resulting four-hold stance has no solution at
+ *    all. Each limb being individually reachable isn't enough: plant four one at
+ *    a time, with the body moving in between, and you can assemble a combination
+ *    no body can hold, which the solver then renders as a stretched wreck.
  */
 
 import { T, levelAt } from './tuning.js';
@@ -36,6 +40,7 @@ import {
   stepFigure,
   centerOfMass,
   canReach,
+  stanceSolvable,
   LIMB_IDS,
 } from './body.js';
 import { createStamina, updateStamina } from './stamina.js';
@@ -176,7 +181,7 @@ export function createGame(canvas) {
       // hold sitting slightly closer shadows a good one and the grab fails for
       // no reason the player can see.
       for (const hold of holdsNear(game.wall, limb.pos, T.SNAP_RADIUS)) {
-        if (canReach(game.fig, limb, hold)) {
+        if (canReach(game.fig, limb, hold) && stanceSolvable(stanceWith(game.fig, limb, hold))) {
           limb.hold = hold;
           break;
         }
@@ -198,6 +203,17 @@ function buildLevel(game) {
   game.fallTimer = 0;
   game.bestHeight = 0;
   snapCamera(game);
+}
+
+/** The four-hold stance that would result from `limb` taking `hold`. */
+function stanceWith(fig, limb, hold) {
+  const pts = {};
+  for (const id of LIMB_IDS) {
+    const other = fig.limbs[id];
+    if (other !== limb && other.hold) pts[id] = other.hold;
+  }
+  pts[limb.id] = hold;
+  return pts;
 }
 
 /** Closest limb endpoint to the touch, if one is close enough to mean it. */

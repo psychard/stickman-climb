@@ -11,7 +11,8 @@
     "verify": "node tools/verify-wall.mjs",
     "sim": "node tools/sim-check.mjs",
     "measure": "node tools/measure.mjs",
-    "ladder": "node tools/ladder.mjs"
+    "ladder": "node tools/ladder.mjs",
+    "fuzz": "node tools/fuzz-drag.mjs"
   },
   "devDependencies": {
     "vite": "^7.1.3"

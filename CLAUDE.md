@@ -23,12 +23,10 @@ recovery, falling, scrolling camera, seeded walls that are climbable by
 construction, and a level menu with five difficulties. Frame cost ~0.3ms of a
 16.7ms budget.
 
-**One thing is known-broken:** the live solver occasionally wedges a planted limb
-past its max reach and never recovers. It happens on ~0.5% of settled frames, and
-because `sim` asserts on the *worst* frame in a run, that currently fails 4 of the
-5 levels. Which levels fail is close to luck — the rate barely moves across them.
-It is pre-existing and not caused by the levels or by hold reuse (both measured);
-see [The stuck-limb deadlock](#the-stuck-limb-deadlock).
+`sim` passes all five levels over the full 400-move route, and `fuzz` — which
+hauls three limbs at once to arbitrary points — leaves a settled violation in
+1 run out of 300. Both were comprehensively red before the solver pass described
+in [Keeping the body physical](#keeping-the-body-physical).
 
 Standing decisions, so they don't get relitigated by accident:
 
@@ -53,10 +51,13 @@ npm run verify   # prove generated walls are climbable (static solve), all 5 lev
 npm run sim      # headless auto-climber (live solver): plant rate, jitter, invariants
 npm run measure  # what the biophysics model actually does, in numbers
 npm run ladder   # are the five levels actually five difficulties?
+npm run fuzz     # haul 3 limbs at once to absurd places; can the body be broken?
 ```
 
-`verify` and `sim` answer "is it broken?"; `measure` and `ladder` answer "what
-does it do?".
+`verify`, `sim` and `fuzz` answer "is it broken?"; `measure` and `ladder` answer
+"what does it do?". `sim` plays cooperatively and `fuzz` plays adversarially, and
+they catch different things — the whole multi-limb-drag regime was unmeasured
+until `fuzz` existed, and it was badly broken.
 Several constants in `tuning.js` cite measured numbers — **if you change a strain
 term, a load rule or a reach constant, run `measure` and update whatever you
 invalidated**, here and in the tuning comments. The numbers below were last
@@ -98,8 +99,10 @@ later constraints win):
 4. torso keeps its length
 5. weak bias keeps the chest above the hip
 
-and finally `projectReach` enforces reach + pose + torso strictly, so the
-envelope gets the last word.
+then `projectReach` enforces reach + pose + torso strictly, followed by
+`REACH_FINAL_PASSES` reach-only sweeps so the envelope genuinely gets the last
+word. `escapeWedge` runs *before* the relaxation and is what gets the body out of
+a bad local minimum. See [Keeping the body physical](#keeping-the-body-physical).
 
 **Apply the drag once per substep, never inside the relaxation loop.** A soft
 constraint re-applied every iteration always beats a hard one it opposes: the
@@ -190,33 +193,83 @@ If it ever starts skittering again, check this first.
 `npm run sim` guards both: it fails the run if an idle hanging figure travels
 more than ~1 world unit over 120 substeps.
 
-### The stuck-limb deadlock
+### Keeping the body physical
 
-**Open bug, and the most valuable thing to fix.** Arriving from certain stances,
-the live solver settles with a planted limb 1–9 units past its max reach and
-stays there — it is a stable fixed point, not slow convergence. A worked repro
-(level 3, move 20): both hands on the left at x≈180, the right foot out at
-x≈282; the live hip sits at x≈200 leaving RF 81.2u from its socket against a
-LEG.max of 80. `solveStatic` on those *same four holds* finds a clean solution at
-hip x≈254 with a 0.02u violation. The live body is 59u away from it, wedged
-between the limbs that want it right and the left foot's *minimum*-reach clamp
-pushing back.
+Four things stop the figure being dragged into shapes a body cannot make. Each
+was found by measurement, and `npm run fuzz` is what holds them in place: it
+grabs up to three limbs at once and hauls them to arbitrary points, which is what
+a player does when poking at the toy and which nothing else exercises. Before this
+pass it produced a 208u leg, an inverted torso and 180u pose violations.
 
-Four hypotheses have been tested and falsified, so don't re-run them:
+**The drag pull was unbounded.** `DRAG_PULL` multiplies the *shortfall* between
+the pointer and the limb's reach, so dragging to three times a limb's length asked
+for ~880 units of body travel in one 1/120s substep. Instrumenting the substep
+showed a planted foot 555u out of reach immediately after the drag and 0u after
+projection — the constraints usually recover, but from some configurations they
+cannot, and that is where the rubber limbs came from. `DRAG_MAX_STEP` caps it, on
+the *body* rather than per pointer: there is one body and it has one speed limit,
+so three fingers cannot haul it three times as fast.
 
-- Not a harness artefact. Excluding force-planted holds per-limb rather than
-  globally doesn't remove it, and on hard levels *every* offending frame is on a
-  hold the figure genuinely planted itself.
-- Not slow convergence. Settling for 1.33s instead of 0.15s changes nothing.
-- Not the projection budget. `PROJECT_PASSES` 6 → 24 doesn't help.
-- Not simply the min-reach clamp, despite that being the mechanism in the repro
-  above. `LEG.min` 26 → 8 makes it dramatically *worse* (24–28u), and splitting
-  `projectReach` into min-then-max sweeps so max always wins is neutral.
+**Pose was measured against the raw pointer.** The correction is proportional to
+how far outside the cone a point sits, so a pointer flung across the wall shoved
+the body by that distance at full strength, every pass, and the reach clamps could
+not win. `poseTarget()` keeps the direction — pointing across your body should
+still rotate the torso — but limits the distance to somewhere the limb could go.
 
-It scales with difficulty, so it is not caused by the new levels: level 1 has it
-too, above ~2000u. It was invisible until now only because `sim` stops when the
-harness pumps out, which on level 1 is move ~187. Run `node tools/sim-check.mjs
-400` with the stamina break commented out to see it on every level.
+**The torso could inverte.** `UPRIGHT_STIFF` is a 0.012 bias and a hard drag
+overwhelms it trivially. That matters far more than it looks: the pose cones live
+in the torso frame, so once the chest passes under the hip every anatomical limit
+mirrors, and the cones start holding the figure in impossible shapes instead of
+out of them. `enforceTilt` caps tilt at `TORSO_TILT_MAX` hard. Normal play reaches
+46 degrees against a 72 degree cap, so it never binds in ordinary climbing.
+
+**Reach did not actually get the last word**, despite the comment saying so. Every
+projection pass ends with pose, torso and tilt, all of which move the body *after*
+the clamps ran, so a planted limb could be left over-stretched however many passes
+it got. `REACH_FINAL_PASSES` re-closes the envelope at the end with only the torso
+kept valid alongside it. Over-stretch is the violation that reads as broken, so it
+wins the tie — and measured over 250 moves x 4 seeds this *raised* plant rate
+(L5 90.3% -> 91.4%), so it is not a trade against reachability.
+
+### You cannot enter a stance that has no solution
+
+`canReach` only asks whether one limb can reach one hold from where the body is
+now. That is not enough. Plant four limbs one at a time, each legal when taken,
+and the body moves between grabs until the combination is one **no body can
+hold** — `solveStatic` returned an 84.7u violation on a stance reached by
+dragging, and its answer was identical to the live body's, so there was nothing
+left for the solver to fix. The figure was drawn with a 99u leg and a foot up by
+its head because that genuinely was the best available answer.
+
+So planting is gated on `stanceSolvable()`, the same way the generator gates
+placing a hold. This keeps the invariant that the current stance always has a
+solution, which holds inductively: releasing a limb only removes constraints, and
+dragging moves the body but not the holds. It is `stanceSolvable` and not
+`stanceFeasible` because the crossed-limb and hands-above-feet rules are the
+generator's taste and shouldn't veto what a player does deliberately.
+
+### The wedge escape
+
+The relaxation is local and path-dependent, so it still has more than one stable
+answer per stance and can settle in a bad one — typically the torso leaning the
+wrong way, which reads every cone mirrored. It is a fixed point, not slow
+convergence: unchanged after 1.33s of settling, and unaffected by more passes.
+
+`solveStatic` seeds from the hold centroids rather than the current body, so it
+finds the *global* answer. `escapeWedge` uses that: past `WEDGE_TRIGGER` of
+violation, with nothing being dragged, the body migrates toward it. Two details
+are load-bearing, both learned the hard way:
+
+- It is applied **before** the relaxation, as an external displacement alongside
+  gravity and the drag. Nudging the body afterwards is simply undone by the next
+  substep's solve, which pulls straight back into the same wedge.
+- It **rotates** the torso rather than interpolating its two ends. The wedged
+  answer and the good one are usually mirrored, and lerping the endpoints between
+  those passes through a zero-length torso, which `enforceTorso` then re-expands
+  back into the wedge. Rotating is the motion that actually gets there.
+
+It fires often (26k times in a fuzz run, ~99% of them finding a better answer),
+so don't assume it is a rare safety net — it is part of how the body settles.
 
 **Two-bone IK has its own two traps**, both in `ikJoint`. Normalise by the TRUE
 distance — clamping the length first and then dividing leaves a direction vector
@@ -232,9 +285,9 @@ arm load — and `REST_STRAIN` is the threshold between draining and recovering.
 The whole pacing mechanic is that one number.
 
 It's calibrated against the measured spread of **real route stances** on level 1
-(currently p25 ≈ 0.30, median ≈ 0.37, p90 ≈ 0.63), so about the best quarter
+(currently p25 ≈ 0.27, median ≈ 0.36, p90 ≈ 0.59), so about the best third
 recover. Harder levels are deliberately worse: `ladder` reports rests falling from
-40% of stances on level 1 to 5% on level 5.
+44% of stances on level 1 to 4% on level 5.
 `npm run measure` prints that spread and the resulting recover fraction. Always
 calibrate against it rather than against idealised stances: a clean test-harness
 stance scores ~0.12, far below anything the generator actually produces, and
@@ -287,9 +340,10 @@ Both checks matter and they check different things:
 - `npm run sim` — replays those same routes through the live per-frame solver.
   Catches oscillation, failed grabs, and dynamic/static mismatch.
 
-`sim` stops a run when the harness pumps out, so hard levels are exercised over
-far fewer moves than easy ones (`pumpedAt` reports where). That is the coverage
-limit that hid the stuck-limb deadlock; pass a `maxMoves` argument to dig deeper.
+`sim` used to stop when the harness pumped out, which on level 5 was move 44 --
+far too few for a 90% plant-rate assertion (one extra miss moves it 2%) and it hid
+the wedge bug entirely. It now walks the whole route and reports `pumpedAt`
+separately. Plant rate over 250 moves x 4 seeds is the number to trust.
 
 Expect ~91–96% per-move plant rate from `sim`. It drags for a fixed 0.18s and
 releases blind; a human holds until the target ring highlights, so real success
@@ -307,7 +361,7 @@ stances are excluded from the anatomical invariants (`watch.synthetic`) — the
 figure never actually achieved them, so asserting on them measures the harness.
 
 **Known gap — the obvious next piece of work.** The generator only checks stances
-are *possible*, never that they're good. It averages ~33% of bodyweight on the
+are *possible*, never that they're good. It averages ~29% of bodyweight on the
 arms across a route, and it never tries to put the feet under the body, which is
 why rests are scarcer than they should be and why `REST_STRAIN` has to sit so
 high. Teaching `stanceFeasible` to *prefer* low-arm-load stances (rather than
@@ -341,14 +395,14 @@ because move distance is untouched and only quality and filler changed.
 `npm run ladder` is the tool that justifies the spacing, and the table in
 `tuning.js` is its output — regenerate it if you touch `LEVELS`, `MOVE_DIST`,
 `QUALITY_*`, `REUSE*`, `FILL_DENSITY`, `DIFF_FULL_HEIGHT`, or anything that moves
-strain. Currently the auto-climber gets 1809/1621/1391/987/799u up the five levels.
+strain. Currently the auto-climber gets 2107/1728/1442/1074/894u up the five levels.
 
 The column to watch is **`choices`**: how many legal moves a stance offers, and
 `stuck`, how many of the four limbs have none at all. That is the difference
 between a staircase and a problem — on level 5 an average stance offers 4 moves
 and more than one limb has nowhere to go, so there may be no right-hand move until
 the right foot has moved, and none for that until the left foot has. Ordering is
-the puzzle. Level 1 offers 10.7 moves a stance, where any order works.
+the puzzle. Level 1 offers 11.0 moves a stance, where any order works.
 
 **Move distance is not the difficulty lever it looks like.** `MOVE_DIST` ramps
 52 → 84 across the ladder but the *achieved* move only goes 62 → 69, because a
@@ -359,7 +413,7 @@ check refuses anything longer. Asking for longer moves just costs plant rate.
 one new hold per limb move, density was pinned near 9.5 holds per 100u whatever
 else you tuned — a limb can only move so far, so the holds it needs arrive at a
 fixed rate. `T.REUSE` lets a move land on a hold that already exists, which breaks
-that link: density now runs 8.8 → 4.1 per 100u across the ladder.
+that link: density now runs 9.0 → 4.2 per 100u across the ladder.
 
 Reuse is a **feet-only** mechanism in practice, and that's structural rather than
 a tuning failure. The hands are the top of the route, so nothing exists above them
