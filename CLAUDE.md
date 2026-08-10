@@ -83,6 +83,9 @@ exactly like the dev server does, so a build-only check passes while the one
 command meant to rehearse the deploy serves the built HTML at `/` and 404s every
 asset. Don't reintroduce a base without that half.
 
+To put a *different* project on its own `psychard.com` subdomain, follow
+[docs/PUBLISHING.md](docs/PUBLISHING.md) — this repo is its worked example.
+
 The domain lives in this repo's Pages settings, not in a `CNAME` file: the
 Actions build type takes it from there, so `dist/` needs nothing added. DNS is a
 GoDaddy wildcard `*.psychard.com → psychard.github.io`, so a second game needs
