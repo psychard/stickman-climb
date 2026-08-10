@@ -69,23 +69,27 @@ removing those entries makes the tunnel 502 while localhost keeps working.
 
 ## Deploying
 
-Pushing to `main` publishes via `.github/workflows/pages.yml`
-(npm ci → `verify` → `build` → upload → deploy). The `psychard` account has a
-Pages custom domain, so `https://psychard.github.io/stickman-climb/` 301s to
-<http://www.psychard.com/stickman-climb/> — that redirect is account-level and
-not configured by this repo.
+Pushing to `main` publishes to <https://climb.psychard.com/> via
+`.github/workflows/pages.yml` (npm ci → `verify` → `build` → upload → deploy).
 The Pages source is set to "GitHub Actions", not deploy-from-branch, so there is
 no `gh-pages` branch and nothing to commit — `dist/` stays gitignored.
 
-**Pages serves a project site under `/<repo>/`, so `base` must be
-`/stickman-climb/` for the build**, or every asset 404s on the deployed site
-while working perfectly on localhost. `vite.config.js` keys that off
-`command === 'build' || isPreview`, and the `isPreview` half is not optional:
-`vite preview` reports `command === 'serve'` exactly like the dev server, so
-without it preview serves the built HTML at `/` while that HTML asks for
-`/stickman-climb/assets/…` and 404s — i.e. the one command meant to rehearse the
-deploy fails in a way the deploy doesn't, and vice versa. Dev stays at `/` so the
-ngrok URL needs no subpath. If the repo is ever renamed, this constant moves too.
+**The site is served at the root of its own subdomain, so there is no `base` in
+`vite.config.js`** and dev, `preview` and the deployed build all agree on `/`.
+That is the whole reason for the subdomain. Serving from a bare project URL
+instead (`psychard.github.io/stickman-climb/`) needs `base: '/stickman-climb/'`
+for the build *and* for preview — `vite preview` reports `command === 'serve'`
+exactly like the dev server does, so a build-only check passes while the one
+command meant to rehearse the deploy serves the built HTML at `/` and 404s every
+asset. Don't reintroduce a base without that half.
+
+The domain lives in this repo's Pages settings, not in a `CNAME` file: the
+Actions build type takes it from there, so `dist/` needs nothing added. DNS is a
+GoDaddy wildcard `*.psychard.com → psychard.github.io`, so a second game needs
+no DNS work at all — just its own custom domain in its own repo's Pages
+settings. `psychard.com` is a **verified domain** on the GitHub account, which
+is what stops anyone else claiming a subdomain of it; that verification is not
+optional given the wildcard.
 
 ## Layout
 

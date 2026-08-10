@@ -1,12 +1,11 @@
 import { defineConfig } from 'vite';
 
-export default defineConfig(({ command, isPreview }) => ({
-  // GitHub Pages serves a project site under /<repo>/, so built asset URLs need
-  // that prefix. Dev stays at / — otherwise localhost and the ngrok tunnel would
-  // both need the subpath too. `vite preview` reports command 'serve' like the
-  // dev server does, so it needs isPreview as well or it serves the built HTML
-  // at / while that HTML asks for /stickman-climb/assets, and every asset 404s.
-  base: command === 'build' || isPreview ? '/stickman-climb/' : '/',
+// No `base`. The site is served at the root of climb.psychard.com, not under a
+// /<repo>/ path, so dev, preview and the deployed build all agree on '/'. If it
+// ever moves back to a bare github.io project URL, base has to become
+// '/stickman-climb/' for the build *and* for preview — `vite preview` reports
+// command 'serve' exactly like the dev server, so a plain build check misses it.
+export default defineConfig({
   server: {
     // 0.0.0.0 so the phone / ngrok can reach it.
     host: true,
@@ -22,4 +21,4 @@ export default defineConfig(({ command, isPreview }) => ({
       '.ngrok.dev',
     ],
   },
-}));
+});
