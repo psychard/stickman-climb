@@ -93,8 +93,8 @@ console.log('\n=== strain over real route stances (what REST_STRAIN calibrates t
       }
     };
     st(60);
-    for (const target of wall.holds.filter((h) => h.route).slice(4, 304)) {
-      fig.limbs[target.limb].hold = target;
+    for (const mv of wall.route.slice(0, 300)) {
+      fig.limbs[mv.limb].hold = mv.hold;
       st(30);
       const s = computeStrain(fig);
       samples.push(s.total);

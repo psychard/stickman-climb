@@ -124,10 +124,11 @@ export const T = {
   W_FLEX: 0.4,
   W_BALANCE: 0.45,
   W_ARMLOAD: 0.45, // cost of simply having weight on your arms
-  // Calibrated against the measured spread of real route stances, which runs
-  // p25 0.32 / median 0.41 / p90 0.73. Sitting just under the p25 means roughly
+  // Calibrated against the measured spread of real route stances on level 1,
+  // which runs p25 0.30 / median 0.37 / p90 0.63. Sitting at the p25 means roughly
   // the best quarter of positions on the wall offer a rest, so you have to hunt
-  // for them. Re-measure with tools/ if the strain terms change.
+  // for them. Harder levels get far fewer by design (4% of stances on level 5).
+  // Re-measure with tools/ if the strain terms change.
   REST_STRAIN: 0.3,
 
   DRAIN_RATE: 0.16, // stamina/sec per unit of net strain
@@ -173,7 +174,7 @@ export const T = {
   HOLD_R_MAX: 10, // radius of a 1-quality jug
 
   // -------------------------------------------------------------- generator ---
-  SEED: 20260808, // the one fixed prototype seed
+  SEED: 20260808, // seed for level 1; each level below carries its own
   ROUTE_MOVES: 600, // how many limb moves of guaranteed-climbable route
   GEN_CANDIDATES: 48, // sampling attempts per move before relaxing the ask
   GEN_SOLVE_ITERS: 60, // relaxation passes in the headless feasibility check
@@ -183,15 +184,74 @@ export const T = {
 
   // Move distance and hold quality both ramp with height.
   DIFF_FULL_HEIGHT: 5000, // height at which difficulty reaches 1.0
+
+  // The five walls on the menu. A level is a *floor* under the same easy->hard
+  // scalar the height ramp already drives (see difficultyAt), so one number per
+  // level moves hold quality, filler density and move distance together and there
+  // is no second difficulty system to keep in sync. Level 1 is floor 0 -- the
+  // wall the prototype had before the menu existed.
+  //
+  // The floors are spaced on measured results, not by eye. `npm run ladder`
+  // prints this table; the columns that matter are how far the auto-climber gets
+  // and how many moves it makes before pumping out:
+  //
+  //   lvl  floor  holds/100u  hold q  choices  stuck  rests  climbed  moves
+  //    1    0.00      8.8       0.79     10.7   0.38    40%    1809u   153
+  //    2    0.20      7.7       0.66      9.7   0.38    33%    1621u   127
+  //    3    0.45      6.3       0.50      7.0   0.47    17%    1391u    97
+  //    4    0.70      5.4       0.33      5.7   0.82     8%     987u    62
+  //    5    1.00      4.1       0.15      4.0   1.09     5%     799u    50
+  //
+  // `choices` is how many legal moves a stance offers and `stuck` how many of the
+  // four limbs have none. Level 5 averages more than one limb with nowhere to go,
+  // which is the point: you have to work out which limb can move, and in what
+  // order. Note the auto-climber never rests deliberately, so a human gets
+  // further -- these are for spacing the rungs, not for predicting scores.
+  //
+  // Move distance is NOT the lever it looks like. MOVE_DIST ramps 52 -> 84 across
+  // the ladder but the *achieved* move only goes 62 -> 69, because a limb move is
+  // capped by anatomy (ARM.max 68, LEG.max 80) and the generator's feasibility
+  // check refuses anything longer. Asking for still-longer moves just costs plant
+  // rate. Hold REUSE, not move distance, is what makes a hard wall sparse.
+  LEVELS: [
+    { name: 'SLAB', blurb: 'jugs all the way up', floor: 0.0, seed: 20260808 },
+    { name: 'STEEP', blurb: 'fewer holds, longer moves', floor: 0.2, seed: 41773 },
+    { name: 'OVERHUNG', blurb: 'small holds, rests are rare', floor: 0.45, seed: 90211 },
+    { name: 'ROOF', blurb: 'crimps, no rests', floor: 0.7, seed: 155317 },
+    { name: 'PROJECT', blurb: 'nothing given away', floor: 1.0, seed: 262147 },
+  ],
   MOVE_DIST: { easy: 52, hard: 84 }, // target reach per move, lerped by difficulty
+
+  // Chance the generator tries to move a limb onto a hold that already exists
+  // rather than placing a new one. This is what makes a hard wall *sparse*: with
+  // one new hold per limb move the wall has a fixed ~9.5 holds per 100u no matter
+  // what else you tune, because a limb can only move so far. Reuse breaks that
+  // link -- a foot steps onto the hold a hand left two moves ago, and the move
+  // costs no hold at all.
+  //
+  // It is also what makes order matter, which is the point: on a sparse wall
+  // there may be no legal right-hand move until the right foot has moved, and no
+  // legal right-foot move until the left foot has. See `npm run ladder`, which
+  // reports how many moves are available per stance.
+  REUSE: { easy: 0.0, hard: 0.97 },
+  REUSE_RANGE: 1.25, // how far past the target move distance to look, as a multiple
+  REUSE_GAIN: 0.3, // ...and the minimum height gain, likewise
+  REUSE_TRIES: 10, // feasibility solves per reuse attempt, best-first
   MOVE_SPREAD: 48, // lateral jitter when sampling candidates
   // The route is a random walk, which left alone hugs the centre of the wall and
   // stacks on itself. A slow lateral drift makes it traverse and use the width.
   MOVE_DRIFT: { amp: 0.2, period: 900, pull: 0.3 },
-  QUALITY_ROUTE: { easy: 0.95, hard: 0.3 },
-  QUALITY_FILL: { easy: 0.7, hard: 0.12 },
+  // The hard ends of these two were 0.3 / 0.12 when there was one wall, which is
+  // as hard as "the top of a long climb" needs to be. Spanning five levels needs
+  // more headroom: at 0.3 the top three rungs all collapsed onto the same wall
+  // (the auto-climber reached 1103/1008/1015u -- levels 4 and 5 were the same
+  // difficulty). Extending them to 0.1 / 0.04 spread that to 1113/990/863u.
+  // Level 1's *route* is unaffected -- move distance is untouched, so the
+  // geometry is bit-identical; only holds above ~1000u are smaller than they were.
+  QUALITY_ROUTE: { easy: 0.95, hard: 0.1 },
+  QUALITY_FILL: { easy: 0.7, hard: 0.04 },
   QUALITY_JITTER: 0.16,
-  FILL_DENSITY: { easy: 0.5, hard: 0.12 }, // filler holds per route hold
+  FILL_DENSITY: { easy: 0.5, hard: 0.04 }, // filler holds per route hold
   FILL_MIN_GAP: 30, // don't drop filler this close to an existing hold
 
   // ----------------------------------------------------------------- camera ---
@@ -221,9 +281,21 @@ export const T = {
   },
 };
 
-/** 0 at the ground, 1 at DIFF_FULL_HEIGHT and above. */
-export function difficultyAt(height) {
-  return Math.max(0, Math.min(1, height / T.DIFF_FULL_HEIGHT));
+/**
+ * The one easy->hard scalar: 0 at the ground, 1 at DIFF_FULL_HEIGHT and above.
+ *
+ * `floor` is the chosen level's starting difficulty. The ramp is applied to
+ * what's *left* above the floor, so every level still gets harder as you climb
+ * and no level can exceed 1.0. floor 0 reproduces the pre-menu behaviour exactly.
+ */
+export function difficultyAt(height, floor = 0) {
+  const ramp = Math.max(0, Math.min(1, height / T.DIFF_FULL_HEIGHT));
+  return floor + (1 - floor) * ramp;
+}
+
+/** Clamp a menu level index to a real one, and hand back its definition. */
+export function levelAt(index) {
+  return T.LEVELS[clamp(index | 0, 0, T.LEVELS.length - 1)];
 }
 
 export const lerp = (a, b, t) => a + (b - a) * t;

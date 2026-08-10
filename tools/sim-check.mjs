@@ -172,32 +172,44 @@ function attemptMove(fig, stam, wall, limb, target, watch) {
  * real per-frame physics, so a mismatch between the two is caught here rather
  * than by the player getting stuck halfway up.
  */
-function climb(seed, maxMoves = 400) {
-  const wall = generateWall(seed);
+function climb(seed, level, maxMoves = 400) {
+  const wall = generateWall(seed, level);
   const fig = createFigure(wall.start);
   const stam = createStamina();
   step(fig, stam, 60);
 
   const restJitter = measureJitter(fig, stam);
 
-  const route = wall.holds.filter((h) => h.route).slice(4);
+  const route = wall.route;
   const watch = makeWatch();
   let planted = 0;
   let missed = 0;
   let minStamina = 1;
+  let pumpedAt = 0;
 
-  for (const target of route.slice(0, maxMoves)) {
-    const limb = fig.limbs[target.limb];
-    if (attemptMove(fig, stam, wall, limb, target, watch)) planted++;
+  // The run stops when the harness pumps out, which is what bounds how much of
+  // each wall gets exercised -- hard levels are therefore checked over far fewer
+  // moves than easy ones (see `pumpedAt`). Pass a `maxMoves` and comment this out
+  // to walk the whole route instead; note that doing so currently trips the
+  // settled-leg-stretch assertion on every level, including level 1 above ~2000u,
+  // via a pre-existing local-minimum deadlock in the live solver. See CLAUDE.md.
+  for (const mv of route.slice(0, maxMoves)) {
+    const limb = fig.limbs[mv.limb];
+    if (attemptMove(fig, stam, wall, limb, mv.hold, watch)) planted++;
     else missed++;
 
     minStamina = Math.min(minStamina, stam.value);
-    if (stam.value <= 0) break;
+    if (stam.value <= 0) {
+      pumpedAt = planted + missed;
+      break;
+    }
   }
 
   const moves = planted + missed;
   return {
     seed,
+    level,
+    pumpedAt,
     height: -fig.hip.y,
     planted,
     missed,
@@ -218,10 +230,13 @@ function climb(seed, maxMoves = 400) {
   };
 }
 
-const seeds = [T.SEED, 1000, 8919, 24757];
+// Every level, on the seed the menu actually serves for it.
+//   node tools/sim-check.mjs [maxMoves]
+const maxMoves = Number(process.argv[2] || 400);
+const runs = T.LEVELS.map((lvl, level) => ({ level, seed: lvl.seed }));
 let bad = 0;
-for (const seed of seeds) {
-  const r = climb(seed);
+for (const { level, seed } of runs) {
+  const r = climb(seed, level, maxMoves);
   // A hanging figure that travels more than a hair over 120 idle substeps is
   // oscillating, and that is exactly the "crazy spring" failure mode.
   const jitterOk = r.restJitter < 1.0;
@@ -239,7 +254,7 @@ for (const seed of seeds) {
   const ok = jitterOk && plantOk && feetOk && poseOk && jointsOk && contactsOk;
   if (!ok) bad++;
   console.log(
-    `${ok ? 'PASS' : 'FAIL'} seed ${String(r.seed).padStart(9)}  ` +
+    `${ok ? 'PASS' : 'FAIL'} L${level + 1} ${T.LEVELS[level].name.padEnd(8)} ` +
       `climbed ${r.height.toFixed(0).padStart(5)}u  ` +
       `moves ${String(r.planted).padStart(3)}ok/${String(r.missed).padStart(2)}miss ` +
       `(${(r.plantRate * 100).toFixed(0)}%)  ` +
@@ -249,7 +264,8 @@ for (const seed of seeds) {
       `peels ${r.peels}  ` +
       `solo ${(r.soloPct * 100).toFixed(1)}%  noFeet ${(r.noFeetPct * 100).toFixed(0)}%  ` +
       `flips/move ${r.flipsPerMove.toFixed(2)}  ` +
-      `stam min ${r.minStamina.toFixed(2)}  strain move ${r.strainMoving.toFixed(2)} / rest ${r.strainSettled.toFixed(2)}` +
+      `pumpedAt ${r.pumpedAt ? `move ${String(r.pumpedAt).padStart(3)}` : '   never'}  ` +
+      `strain move ${r.strainMoving.toFixed(2)} / rest ${r.strainSettled.toFixed(2)}` +
       (jitterOk ? '' : '  <-- OSCILLATING') +
       (plantOk ? '' : '  <-- GRABS FAILING') +
       (feetOk ? '' : '  <-- FEET STRETCHING OR PEELING') +
@@ -258,5 +274,5 @@ for (const seed of seeds) {
       (contactsOk ? '' : '  <-- STRIPPED TO ONE CONTACT'),
   );
 }
-console.log(bad === 0 ? '\nSimulated climbs OK.' : `\n${bad}/${seeds.length} runs had problems.`);
+console.log(bad === 0 ? '\nSimulated climbs OK.' : `\n${bad}/${runs.length} runs had problems.`);
 process.exit(bad === 0 ? 0 : 1);
