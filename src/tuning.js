@@ -69,7 +69,15 @@ export const T = {
   // and rotate rather than just slide.
   ANCHOR_SPLIT_NEAR: 0.75,
   UPRIGHT_STIFF: 0.012, // weak bias keeping the chest above the hip
-  FOOT_PUSH_STIFF: 0.22, // legs pressing the body up off a foothold
+  FOOT_PUSH_STIFF: 0.9, // legs pressing the body up off a foothold
+  // ...saturating here, in world units per second. A deeply folded leg would
+  // otherwise ask to shove the body 10u in one substep -- four times gravity's sag
+  // -- which no clamp reconciles and which alternated at 60Hz. Ordinary standing
+  // corrections are ~3u/substep and sit well under this, so the mechanic is
+  // untouched: measured strain at rest is the same as before the cap, where
+  // softening the stiffness instead cost 0.1 of it.
+  FOOT_PUSH_RATE: 900,
+  FOOT_PUSH_REACH: 1.05,
   CLAMP_STIFF: 1.0, // hard min/max reach clamps (planted limbs tether here)
   PROJECT_PASSES: 16, // strict reach projection after relaxation; see projectReach
   // Reach-only sweeps after those, so the envelope is genuinely the last thing
@@ -78,36 +86,77 @@ export const T = {
   // no matter how many passes it gets -- drawn as a rubber limb.
   REACH_FINAL_PASSES: 4,
   // The relaxation is local, so it has more than one stable answer per stance and
-  // can settle in a bad one -- see escapeWedge. Past this much violation, with
-  // nothing being dragged, the body migrates toward solveStatic's global answer at
-  // WEDGE_RECOVER per second. Trigger is well above the ~0.6u of ordinary solver
-  // noise; the rate is fast enough to look like settling, slow enough not to snap.
+  // can settle in a bad one -- see escapeWedge. Past this much violation left
+  // standing AFTER a substep has finished solving, with nothing being dragged, the
+  // body migrates toward solveStatic's global answer. Trigger is well above the
+  // ~0.6u of ordinary solver noise.
+  //
+  // The two rates are a genuine speed limit -- units/s and degrees/s toward the
+  // better answer -- not a fraction of the distance remaining. That distinction
+  // was the whole bug: `min(1, 90 * dt)` closes 75% of the gap per substep at
+  // 120Hz, so a wedge escape fired on a transient threw the body 18u and the
+  // solver walked it back, over and over.
+  //
+  // Both rates are then scaled by urgency = violation / WEDGE_REF, capped. A
+  // serious wedge (WEDGE_REF and up -- the ones this exists for measured 60-85u)
+  // moves at full speed and clears inside the 45-substep recovery lead `npm run
+  // fuzz` allows. A 2u violation moves at a tenth of that, which is invisible per
+  // substep and, crucially, does not overshoot into a state the local solver will
+  // undo -- that overshoot was a 9Hz sawtooth on the stances where a limb sits just
+  // inside its minimum length.
   WEDGE_TRIGGER: 2.0,
-  WEDGE_RECOVER: 90,
-  // Applied once per substep (see applyDragPull), so this is much larger than a
-  // per-iteration stiffness would be. Counterintuitively, stronger is better on
-  // every axis: the body reaches the boundary its planted limbs allow within a
-  // substep and stays there, instead of lagging mid-migration and fighting the
-  // constraints across frames. 0.6 -> 6.0 took plant rate 75% -> 93% while
-  // *reducing* peak leg stretch from 8.0u to 4.2u.
-  DRAG_PULL: 6.0, // how hard a dragged limb drags the body toward the target
+  WEDGE_RECOVER: 400, // world units / second at full urgency
+  WEDGE_TURN: 1200, // degrees / second at full urgency
+  WEDGE_REF: 8, // violation counted as a full-urgency wedge, world units
+  WEDGE_URGENCY_MAX: 4,
+  // How long the escape may keep pushing at one set of holds before giving up on
+  // it. Some stances have a better global answer that the local relaxation simply
+  // refuses to hold, and then the two solvers take turns forever -- measured as a
+  // 9Hz, 4u twitch that never ended. This is deliberately a hair under the 0.375s
+  // recovery lead `npm run fuzz` allows, so a genuine wedge still clears.
+  WEDGE_BUDGET: 1.0, // seconds, per stance
+  WEDGE_REARM: 0.25, // budget recovered per second of clean time, as a rate
+  // Applied once per substep (see applyDragPull), multiplying the shortfall past
+  // LUNGE_START. This is a stability limit, not a taste knob: the anchor takes ~3/4
+  // of the move, so past an effective gain of 1 the body overshoots the threshold,
+  // and past ~2 it overshoots by more than it was short, which rings. Measured over
+  // 200 moves x 5 levels, plant rate plateaus at 2.0 (94%) and the only thing
+  // higher values buy is chatter -- 0 bouncing windows at 2.0, 53 at 6.0.
+  //
+  // It was 6.0 against an error term ~11u larger (the distance to a settle target
+  // rather than the shortfall itself), which is a much gentler pull than the number
+  // suggests. Don't read across from the old value.
+  DRAG_PULL: 2.5, // how hard a dragged limb drags the body toward the target
   // Damps the upward component: hauling yourself up is muscular work, leaning
   // sideways is nearly free. This used to be 0.4 to stop a reach levitating the
   // figure, but that was compensating for feet that could not limit the body.
   // Now that a planted leg hard-limits it, the damping can be gentle.
   DRAG_LIFT: 0.8,
-  // The lunge needs two thresholds, as fractions of the limb's max reach.
-  // START: don't shift the body for anything the limb can already touch --
-  //   lunging from the *preferred* length meant every reach hauled the body up,
-  //   over-extended both legs and peeled both feet off.
-  // SETTLE: but once committed, pull the target comfortably inside reach rather
-  //   than to the exact boundary, or the stance lands on a knife edge and the
-  //   settle that follows pushes it straight back out of range.
-  // Measured tradeoff (600 sim moves): START 0.90/SETTLE 0.70 gives a 97% plant
-  // rate but peels a foot on 6.5% of moves; START 1.00/SETTLE 0.84 holds ~95%
-  // while dropping that to ~2.5%. Feet staying on is worth the 2%.
-  LUNGE_START: 1.0,
+  // Where the lunge starts, as a fraction of the limb's max reach. Don't shift the
+  // body for anything the limb can comfortably touch: lunging from the *preferred*
+  // length (0.74) meant every reach hauled the body up, over-extended both legs and
+  // peeled both feet off.
+  //
+  // It sits just INSIDE max reach rather than exactly at it, which is what replaced
+  // the old second threshold (LUNGE_SETTLE, 0.84). The pull now aims at this same
+  // line -- see applyDragPull -- so the body settles a fraction of a unit past it
+  // and the hold ends up genuinely in reach, which is what the settle target was
+  // for. Two separate lines, one to arm the pull and one to aim it, is what made
+  // the lunge oscillate. Measured at 0.95: no bouncing left in `npm run jitter`,
+  // and plant rate is unchanged.
+  LUNGE_START: 0.95,
+  // ...and how deep it aims once the player is genuinely hauling, likewise as a
+  // fraction of max reach. Two aims, selected by pointer speed, because the two
+  // failure modes live in different regimes: aiming deep with the pointer STILL is a
+  // bang-bang controller and rings at 60Hz, while aiming only at the threshold
+  // leaves the socket a hair out of reach at release and refuses grabs the player
+  // can see land -- half of all missed grabs, with the hand drawn right on the hold.
   LUNGE_SETTLE: 0.84,
+  // Pointer speed, world units/s, at which the aim is fully committed. An ordinary
+  // drag covers a limb's length in half a second, so ~120 is "actually reaching".
+  LUNGE_COMMIT_SPEED: 120,
+  LUNGE_SPEED_ATTACK: 0.05, // seconds; commit the moment they start hauling...
+  LUNGE_SPEED_RELEASE: 0.35, // ...and let go of it slowly, so a pause is survivable
   // Hard ceiling on how far one dragged limb may displace the body in a single
   // substep. DRAG_PULL multiplies the *shortfall*, which is unbounded: drag a
   // limb to 3x its reach and the lunge asks for 880 units of body travel in one
@@ -144,6 +193,23 @@ export const T = {
   // Small enough that a tap is deliberate, large enough that a thumb resting on
   // a limb doesn't start dragging it.
   TAP_SLOP: 5,
+  // A stance whose violation stays this bad for this long is not a stance the body
+  // is in -- it is one no body could be in, and the game drops you.
+  //
+  // Releasing a limb was assumed to be always safe, on the grounds that it only
+  // removes constraints. That is false for hands: let both of them go and you are
+  // left hanging from two feet, which POSE.FOOT_RISE forbids outright, so the solver
+  // is asked for a position that does not exist and draws a leg folded up past the
+  // head. `npm run fuzz` reaches it by dragging two limbs at once and failing to
+  // re-plant either, and a player poking at the toy will find it in seconds.
+  // Physically you have just let go of the wall with nothing under you, so: you fall.
+  //
+  // The threshold is far above anything ordinary play produces (route stances settle
+  // under 3u, and the worst wedge the escape recovers from is ~20u) and far below
+  // the 55u this exists to catch. The delay is longer than the wedge escape's own
+  // recovery, so a stance being fixed is never mistaken for one being lost.
+  FALL_VIOLATION: 30,
+  FALL_VIOLATION_TIME: 0.3,
   FALL_LINGER: 0.85, // seconds watching yourself fall before the retry overlay
   // How decisive the outboard test must be before a joint may switch bend side.
   // Near zero the limb is pointing sideways and the test is meaningless, so the
@@ -157,12 +223,14 @@ export const T = {
   W_FLEX: 0.4,
   W_BALANCE: 0.45,
   W_ARMLOAD: 0.45, // cost of simply having weight on your arms
-  // Calibrated against the measured spread of real route stances on level 1,
-  // which runs p25 0.27 / median 0.36 / p90 0.59, so roughly the best third of
-  // positions on the wall offer a rest and you have to hunt for them. Harder
-  // levels get far fewer by design (4% of stances on level 5). Re-measure with
-  // tools/ if the strain terms change.
-  REST_STRAIN: 0.3,
+  // Calibrated against the measured spread of real route stances, which runs
+  // p25 0.30 / median 0.38 / p90 0.66, so roughly the best third of positions on the
+  // wall offer a rest and you have to hunt for them. Harder levels get far fewer by
+  // design. Re-measure with `npm run measure` if the strain terms change -- and note
+  // that a SOLVER change moves this too: the jitter fix left the figure standing a
+  // little lower (37% of bodyweight on the arms, up from 29%), which pushed every
+  // stance's strain up ~0.02 and cost 8 points of rest fraction until this followed.
+  REST_STRAIN: 0.32,
 
   DRAIN_RATE: 0.16, // stamina/sec per unit of net strain
   RECOVER_RATE: 0.5, // stamina/sec per unit of net (negative) strain
@@ -229,11 +297,11 @@ export const T = {
   // and how many moves it makes before pumping out:
   //
   //   lvl  floor  holds/100u  hold q  choices  stuck  rests  climbed  moves
-  //    1    0.00      9.0       0.79     11.0   0.18    44%    2107u   179
-  //    2    0.20      7.7       0.65      9.3   0.38    42%    1728u   134
-  //    3    0.45      6.2       0.49      7.0   0.56    21%    1442u   100
-  //    4    0.70      5.2       0.34      5.3   0.93     9%    1074u    67
-  //    5    1.00      4.2       0.16      4.0   1.22     4%     894u    49
+  //    1    0.00      9.0       0.79     12.5   0.13    40%    1983u   171
+  //    2    0.20      7.6       0.66      8.0   0.37    28%    1326u   102
+  //    3    0.45      6.0       0.50      8.0   0.33    19%    1297u    94
+  //    4    0.70      5.7       0.34      6.0   0.93     6%    1060u    68
+  //    5    1.00      4.4       0.15      4.5   1.13     2%     796u    46
   //
   // `choices` is how many legal moves a stance offers and `stuck` how many of the
   // four limbs have none. Level 5 averages more than one limb with nowhere to go,
@@ -279,8 +347,12 @@ export const T = {
   // more headroom: at 0.3 the top three rungs all collapsed onto the same wall
   // (the auto-climber reached 1103/1008/1015u -- levels 4 and 5 were the same
   // difficulty). Extending them to 0.1 / 0.04 spread that to 1113/990/863u.
-  // Level 1's *route* is unaffected -- move distance is untouched, so the
-  // geometry is bit-identical; only holds above ~1000u are smaller than they were.
+  //
+  // These no longer leave level 1's route geometry bit-identical to the pre-menu
+  // wall, and nothing can: the generator commits a hold only if the body solver says
+  // the stance holds, so any change to the solver reshuffles every wall. The
+  // guarantee that survives is the one that matters -- `npm run verify` re-proves
+  // every route stance on every level, whatever the seeds produce.
   QUALITY_ROUTE: { easy: 0.95, hard: 0.1 },
   QUALITY_FILL: { easy: 0.7, hard: 0.04 },
   QUALITY_JITTER: 0.16,

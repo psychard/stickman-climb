@@ -205,6 +205,30 @@ function buildLevel(game) {
   snapCamera(game);
 }
 
+/**
+ * Is the figure still on the wall in a way a body could manage?
+ *
+ * The design assumed releasing a limb was always safe, on the grounds that it only
+ * removes constraints. That is false once both hands are off: what's left is a body
+ * hanging from two feet, and POSE.FOOT_RISE forbids a foot above the hip outright,
+ * so no body position satisfies the stance. The solver returns its best answer, the
+ * best answer is a leg folded up past the head, and it reads as the game breaking --
+ * when what actually happened is that the player let go of the wall.
+ *
+ * So: with no hand planted, the feet have to be able to hold you on their own. They
+ * usually can -- standing on a ledge is exactly this and solves cleanly -- and when
+ * they can't, you come off. `stanceSolvable` is the same gate planting already uses,
+ * and this only runs in the rare no-hands case, so it costs nothing in normal play.
+ */
+function supported(fig) {
+  const planted = LIMB_IDS.map((id) => fig.limbs[id]).filter((l) => l.hold);
+  if (!planted.length) return true; // nothing on the wall at all is the PEELED OFF rule
+  if (planted.some((l) => l.kind === 'hand')) return true;
+  const pts = {};
+  for (const l of planted) pts[l.id] = l.hold;
+  return stanceSolvable(pts);
+}
+
 /** The four-hold stance that would result from `limb` taking `hold`. */
 function stanceWith(fig, limb, hold) {
   const pts = {};
@@ -273,6 +297,10 @@ export function update(game, dt) {
     const planted = LIMB_IDS.filter((id) => fig.limbs[id].hold).length;
     if (planted === 0) beginFall(game, 'PEELED OFF');
     else if (game.stam.value <= 0) beginFall(game, 'PUMPED OUT');
+    else if (!supported(fig)) beginFall(game, 'CAME OFF');
+    // Backstop for anything the rule above doesn't see: a stance the solver simply
+    // cannot answer, held for long enough that it isn't a wedge being fixed.
+    else if (fig.lostFor > T.FALL_VIOLATION_TIME) beginFall(game, 'CAME OFF');
   } else if (game.state === 'falling') {
     // Watch yourself come off for a beat -- that's the feedback for *why* you
     // fell -- then straight back to the menu, carrying the result with you.

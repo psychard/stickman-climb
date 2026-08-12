@@ -23,10 +23,13 @@ recovery, falling, scrolling camera, seeded walls that are climbable by
 construction, and a level menu with five difficulties. Frame cost ~0.3ms of a
 16.7ms budget.
 
-`sim` passes all five levels over the full 400-move route, and `fuzz` — which
-hauls three limbs at once to arbitrary points — leaves a settled violation in
-1 run out of 300. Both were comprehensively red before the solver pass described
-in [Keeping the body physical](#keeping-the-body-physical).
+`sim` passes all five levels over the full 400-move route at a 91–95% plant rate,
+`fuzz` — which hauls three limbs at once to arbitrary points — leaves a settled
+violation in 2 runs out of 300, and `jitter` finds a visible limit cycle in 1.3% of
+the windows it watches — down from 11.3%, with settled stances now clean. All three
+were comprehensively red before the solver passes described in
+[Keeping the body physical](#keeping-the-body-physical) and
+[Three oscillators](#three-oscillators).
 
 Standing decisions, so they don't get relitigated by accident:
 
@@ -37,6 +40,7 @@ Standing decisions, so they don't get relitigated by accident:
 | **Holds are a direction-free quality scalar.** No underclings, sidepulls or slopers that only work when pulled a particular way. | Deferred |
 | **Nothing peels off a hold automatically.** Planted limbs limit reach; the player taps a limb to release it. | Settled — replaced auto-peel |
 | **Tap-to-release applies to hands too**, not only feet. | Settled, but flagged: a mistimed tap on a hand can drop you |
+| **Letting go of both hands is a fall** (`CAME OFF`) unless the feet alone can hold you. Hanging from two feet is anatomically impossible, so there is no body position to draw. | Settled — was an unnoticed hole in "releasing is always safe" |
 | **Difficulty is one scalar.** A level sets a *floor* under the same easy→hard number the height ramp already drives; there is no second difficulty system. | Settled |
 | **Falling returns to the menu**, carrying the reason and height with it. There is no separate retry screen. | Settled |
 
@@ -52,12 +56,24 @@ npm run sim      # headless auto-climber (live solver): plant rate, jitter, inva
 npm run measure  # what the biophysics model actually does, in numbers
 npm run ladder   # are the five levels actually five difficulties?
 npm run fuzz     # haul 3 limbs at once to absurd places; can the body be broken?
+npm run jitter   # does the body ever settle into a bouncing loop?
 ```
 
-`verify`, `sim` and `fuzz` answer "is it broken?"; `measure` and `ladder` answer
-"what does it do?". `sim` plays cooperatively and `fuzz` plays adversarially, and
-they catch different things — the whole multi-limb-drag regime was unmeasured
+`verify`, `sim`, `fuzz` and `jitter` answer "is it broken?"; `measure` and `ladder`
+answer "what does it do?". `sim` plays cooperatively and `fuzz` plays adversarially,
+and they catch different things — the whole multi-limb-drag regime was unmeasured
 until `fuzz` existed, and it was badly broken.
+
+`jitter` covers a third regime neither of them could see: a body that is *stable*
+by every invariant they check, and oscillating. It watches a second of no input
+after every move, and again with the pointer held still mid-reach, and reports
+**wander** — path length that went nowhere — with direction reversals and the swing
+per reversal. All three are needed: a body migrating to a new equilibrium travels a
+long way and is fine (high wander, no reversals), and solver noise buzzes 0.2u at 15Hz
+which is invisible on a phone (high wander, many reversals, no swing). The cycles
+reported from play swing 2–3u. Judging by amplitude alone flags honest settling just as
+loudly, which made a third of all windows look broken. See [Three oscillators](#three-oscillators).
+
 Several constants in `tuning.js` cite measured numbers — **if you change a strain
 term, a load rule or a reach constant, run `measure` and update whatever you
 invalidated**, here and in the tuning comments. The numbers below were last
@@ -116,23 +132,22 @@ The body is two points — `hip` and `chest` — held apart by a fixed torso len
 Shoulder and hip sockets are derived from those two, so torso lean and rotation
 fall out for free.
 
-Gravity **and the drag lunge** are applied once per substep as external
-displacements. Then the constraints are relaxed, in this order (Gauss-Seidel:
-later constraints win):
+Gravity, **the drag lunge and the foot push** are applied once per substep as
+external displacements. Then the constraints are relaxed, in this order
+(Gauss-Seidel: later constraints win):
 
-1. planted feet **push** the body up off their hold (legs are struts, one-sided)
-2. planted limbs clamp the body inside their reach envelope
-3. **pose cones** keep each limb anatomically plausible relative to the torso
-4. torso keeps its length
-5. weak bias keeps the chest above the hip
+1. planted limbs clamp the body inside their reach envelope
+2. **pose cones** keep each limb anatomically plausible relative to the torso
+3. torso keeps its length
+4. weak bias keeps the chest above the hip
 
 then `projectReach` enforces reach + pose + torso strictly, followed by
 `REACH_FINAL_PASSES` reach-only sweeps so the envelope genuinely gets the last
 word. `escapeWedge` runs *before* the relaxation and is what gets the body out of
 a bad local minimum. See [Keeping the body physical](#keeping-the-body-physical).
 
-**Apply the drag once per substep, never inside the relaxation loop.** A soft
-constraint re-applied every iteration always beats a hard one it opposes: the
+**Apply every soft input once per substep, never inside the relaxation loop.** A
+soft constraint re-applied every iteration always beats a hard one it opposes: the
 lunge kept re-injecting exactly the violation the reach clamps were removing, and
 they settled at a permanent ~8 units of over-extended leg that was completely
 independent of drag strength or drag duration. Same reason `projectReach` exists
@@ -140,16 +155,22 @@ and runs last — enforcing reach on its own can shove the body out of a limb's
 pose cone, so the two have to be projected together or they trade the violation
 back and forth forever.
 
-Because the constraints now get the last word, `DRAG_PULL` wants to be *large*
-(6.0, not 0.3): the body reaches the boundary its planted limbs allow within a
-substep and stays there, instead of lagging mid-migration. Raising it took plant
-rate 75% → 93% while *reducing* peak leg stretch.
+**The foot push belongs there too, and didn't until it was measured.** It sat
+inside the relaxation as its first step, so ten passes of push fought ten passes of
+clamp — and on a stance with one leg at full stretch and the other deeply folded
+they never reconciled: 60u of push against 60u of clamp every substep, forever.
+Moving it out took two follow-ups, because ten applications had been doing real work:
+`FOOT_PUSH_STIFF` went 0.22 → 0.9 to keep the same authority per substep,
+`FOOT_PUSH_RATE` bounds a deeply folded leg from asking for a 10u shove, and
+`FOOT_PUSH_REACH` presses slightly *past* the relaxed leg length, because a one-shot
+press settles a few units short of its own target and those units are the difference
+between standing on your feet and hanging off your arms.
 
 A dragged limb never stretches past max reach. The pointer pulls the *body*, and
 if the body can't get there the grab fails. Visual elasticity past max is capped
 by `REACH_STRETCH` and is cosmetic — `canReach()` is the real gate.
 
-### The lunge needs two thresholds
+### The lunge needs two depths, chosen by pointer speed
 
 `LUNGE_START` / `LUNGE_SETTLE`, both fractions of the limb's max reach, and the
 pair of them is load-bearing:
@@ -157,13 +178,30 @@ pair of them is load-bearing:
 - Lunging from the limb's *preferred* length means **every** reach hauls the body
   along. Reaching overhead then lifts the body, both legs run past their length,
   and both feet peel at once — you end up hanging off one hand for no reason the
-  player did anything to deserve. Only lunge for what the limb genuinely can't
-  reach (`LUNGE_START: 1.0`).
-- But pulling only the *shortfall* stops the body the instant the hold sits at
-  exactly max reach, so the stance lands on a knife edge and the settle that
-  follows pushes it straight back out of range. Plant rate fell to ~65% and no
-  amount of stiffness fixed it, because stiffness isn't the bottleneck — the
-  target is. `LUNGE_SETTLE` pulls to comfortably inside reach instead.
+  player did anything to deserve. Only lunge for what the limb nearly can't
+  reach (`LUNGE_START: 0.95`).
+- But pulling only to that line stops the body the instant the hold sits at about
+  max reach, so the stance lands on a knife edge. Half of all missed grabs were
+  exactly this: the hand is drawn *on the hold* (the last units are `REACH_STRETCH`,
+  which is cosmetic) while the socket is a hair too far and `canReach` refuses.
+  Measured median gap from endpoint to the hold it just failed to take: 0.0u.
+  `LUNGE_SETTLE` pulls comfortably inside reach instead.
+
+**The two cannot both be live at once**, and that was the bug. A pull armed at one
+line and aimed at a deeper one is a bang-bang controller: a pointer 1u out of reach
+asked for 6u of body travel, the body landed 4u *inside* the dead zone where the pull
+is zero, gravity walked it back out, and it fired again — 60Hz, on a fifth of stances.
+So the aim and the arming line are always the same line, and only its *depth* varies:
+committed to `LUNGE_SETTLE` while the pointer is actually moving, relaxed back to
+`LUNGE_START` when it stops, where the pull has a real equilibrium against gravity.
+Fast attack and slow release on that estimate (`LUNGE_SPEED_*`), so pausing mid-reach
+doesn't drop the body out from under the grab you're lining up.
+
+`DRAG_PULL` is then a stability limit, not taste. The anchor takes ~¾ of the move, so
+past an effective gain of ~2 the body overshoots the line by more than it was short
+and rings. Plant rate plateaus there anyway: gain 2 → 94% with zero bouncing windows,
+gain 6 → 95% with 53 of them. The old value of 6.0 multiplied an error term ~11u
+larger, so it was far gentler than the number suggests — don't read across from it.
 
 `DRAG_LIFT` separately damps the upward component: leaning sideways is nearly
 free, hauling yourself upward is muscular work. A hold far above your max reach
@@ -187,6 +225,18 @@ Releasing a trailing foot buys ~8 units of lateral reach.
 Auto-peeling was tried and removed: reaching would silently strip your feet off
 and leave you hanging from one hand, which reads as the game breaking rather than
 as a mistake you made.
+
+**Releasing is not always safe, though the design assumed it was.** The inductive
+argument — "letting go only removes constraints" — is false for hands. Let both of
+them go and what's left is a body hanging from two feet, and `POSE.FOOT_RISE`
+forbids a foot above the hip outright, so *no* body position satisfies the stance.
+The solver returns its best answer, the best answer is a leg folded up past the head,
+and it reads as the game breaking when what happened is that the player let go of the
+wall. So with no hand planted, the feet have to hold you on their own
+(`stanceSolvable`, the same gate planting uses) and you fall (`CAME OFF`) if they
+can't. Standing on a ledge is exactly this stance and solves cleanly, so the ordinary
+case is unaffected. `T.FALL_VIOLATION` is a slower backstop for anything the rule
+doesn't see.
 
 For a foot the limit is **kinematic, not tension** — your leg is only so long.
 This is only safe because the pose cones exist. Max-reach clamps on feet with no
@@ -284,8 +334,8 @@ convergence: unchanged after 1.33s of settling, and unaffected by more passes.
 
 `solveStatic` seeds from the hold centroids rather than the current body, so it
 finds the *global* answer. `escapeWedge` uses that: past `WEDGE_TRIGGER` of
-violation, with nothing being dragged, the body migrates toward it. Two details
-are load-bearing, both learned the hard way:
+violation, with nothing being dragged, the body migrates toward it. Four details
+are load-bearing, all learned the hard way:
 
 - It is applied **before** the relaxation, as an external displacement alongside
   gravity and the drag. Nudging the body afterwards is simply undone by the next
@@ -294,9 +344,47 @@ are load-bearing, both learned the hard way:
   answer and the good one are usually mirrored, and lerping the endpoints between
   those passes through a zero-length torso, which `enforceTorso` then re-expands
   back into the wedge. Rotating is the motion that actually gets there.
+- It triggers on the violation left standing at the **end** of the previous substep
+  (`fig.violation`), never on a fresh mid-substep measurement. A wedge is by
+  definition a fixed point of the solver, so the only honest place to observe one is
+  where the solver stopped. Measuring after gravity and momentum have just been
+  injected instead reads a transient the projection is about to remove — and that
+  transient clears `WEDGE_TRIGGER` regularly on stances whose settled violation is
+  0.00u.
+- The migration is a **speed** (`WEDGE_RECOVER` units/s, `WEDGE_TURN` deg/s) scaled
+  by urgency = violation / `WEDGE_REF`. `min(1, 90 * dt)` reads like a rate limit but
+  closes 75% of the gap per substep — a teleport. Scaling means a 60u mirrored torso
+  still reorganises immediately while a 2u nuisance creeps, which matters because a
+  big correction for a small violation is one the local solver just undoes.
 
 It fires often (26k times in a fuzz run, ~99% of them finding a better answer),
-so don't assume it is a rare safety net — it is part of how the body settles.
+so don't assume it is a rare safety net — it is part of how the body settles. It also
+gives up: `WEDGE_BUDGET` caps how long it may push at one set of holds, re-arming at
+`WEDGE_REARM` — a *fraction* of the burn rate, because resetting the budget whenever
+the violation momentarily cleared let a cycle refill it every time round.
+
+### Three oscillators
+
+The reported bug was that the figure sometimes drops into a bouncing loop. There were
+three separate causes, all invisible to `sim` (which measured jitter only on the start
+stance, the quietest stance on the wall) and all found by `npm run jitter`:
+
+| Cause | Shape | Fix |
+|---|---|---|
+| Wedge escape triggering on a mid-substep transient, then slamming the body 18u toward an answer it didn't need | period-10, ~6% of settled stances | trigger on the settled violation; migrate at a bounded, urgency-scaled speed |
+| Drag lunge armed at one line and aimed at a deeper one | period-2 at 60Hz, ~20% of held-pointer windows | one line, arming and aim; depth varies with pointer speed |
+| Foot push re-injected on every relaxation pass, fighting the reach clamps | chaotic, worst on one leg folded + one at full stretch | apply once per substep as an external input, saturated by `FOOT_PUSH_RATE` |
+
+Two of the three were *fixed* by lowering a stiffness, which is why the measurement
+matters more than the fix: each had a knob that made the symptom go away and the
+mechanic worse. The foot push at 0.1 stiffness stopped bouncing and left the figure
+hanging off its arms (37% → 45% of bodyweight); the drag at gain 1.0 stopped ringing
+and dropped plant rate to 72%.
+
+Residual: 2.7% of held-pointer windows still ring, and no settled stance does —
+1.3% overall against a baseline of 11.3% on the same metric. The gate is a rate for
+held windows and zero for settled ones, since a figure bouncing while nobody is
+touching it is the complaint in its purest form.
 
 **Two-bone IK has its own two traps**, both in `ikJoint`. Normalise by the TRUE
 distance — clamping the length first and then dividing leaves a direction vector
@@ -312,9 +400,11 @@ arm load — and `REST_STRAIN` is the threshold between draining and recovering.
 The whole pacing mechanic is that one number.
 
 It's calibrated against the measured spread of **real route stances** on level 1
-(currently p25 ≈ 0.27, median ≈ 0.36, p90 ≈ 0.59), so about the best third
-recover. Harder levels are deliberately worse: `ladder` reports rests falling from
-44% of stances on level 1 to 4% on level 5.
+(currently p25 ≈ 0.30, median ≈ 0.38, p90 ≈ 0.66), so about the best third
+recover. **A solver change moves this** — the oscillation fix left the figure
+standing slightly lower, which pushed every stance up ~0.02 of strain and cost 8
+points of rest fraction until `REST_STRAIN` followed it from 0.30 to 0.32. Harder levels are deliberately worse: `ladder` reports rests falling from
+40% of stances on level 1 to 2% on level 5.
 `npm run measure` prints that spread and the resulting recover fraction. Always
 calibrate against it rather than against idealised stances: a clean test-harness
 stance scores ~0.12, far below anything the generator actually produces, and
@@ -388,7 +478,7 @@ stances are excluded from the anatomical invariants (`watch.synthetic`) — the
 figure never actually achieved them, so asserting on them measures the harness.
 
 **Known gap — the obvious next piece of work.** The generator only checks stances
-are *possible*, never that they're good. It averages ~29% of bodyweight on the
+are *possible*, never that they're good. It averages ~37% of bodyweight on the
 arms across a route, and it never tries to put the feet under the body, which is
 why rests are scarcer than they should be and why `REST_STRAIN` has to sit so
 high. Teaching `stanceFeasible` to *prefer* low-arm-load stances (rather than
@@ -422,17 +512,17 @@ because move distance is untouched and only quality and filler changed.
 `npm run ladder` is the tool that justifies the spacing, and the table in
 `tuning.js` is its output — regenerate it if you touch `LEVELS`, `MOVE_DIST`,
 `QUALITY_*`, `REUSE*`, `FILL_DENSITY`, `DIFF_FULL_HEIGHT`, or anything that moves
-strain. Currently the auto-climber gets 2107/1728/1442/1074/894u up the five levels.
+strain. Currently the auto-climber gets 1983/1326/1297/1060/796u up the five levels.
 
 The column to watch is **`choices`**: how many legal moves a stance offers, and
 `stuck`, how many of the four limbs have none at all. That is the difference
 between a staircase and a problem — on level 5 an average stance offers 4 moves
 and more than one limb has nowhere to go, so there may be no right-hand move until
 the right foot has moved, and none for that until the left foot has. Ordering is
-the puzzle. Level 1 offers 11.0 moves a stance, where any order works.
+the puzzle. Level 1 offers 12.5 moves a stance, where any order works.
 
 **Move distance is not the difficulty lever it looks like.** `MOVE_DIST` ramps
-52 → 84 across the ladder but the *achieved* move only goes 62 → 69, because a
+52 → 84 across the ladder but the *achieved* move only goes 61 → 69, because a
 limb move is capped by anatomy (`ARM.max` 68, `LEG.max` 80) and the feasibility
 check refuses anything longer. Asking for longer moves just costs plant rate.
 
@@ -440,7 +530,7 @@ check refuses anything longer. Asking for longer moves just costs plant rate.
 one new hold per limb move, density was pinned near 9.5 holds per 100u whatever
 else you tuned — a limb can only move so far, so the holds it needs arrive at a
 fixed rate. `T.REUSE` lets a move land on a hold that already exists, which breaks
-that link: density now runs 9.0 → 4.2 per 100u across the ladder.
+that link: density now runs 9.0 → 4.4 per 100u across the ladder.
 
 Reuse is a **feet-only** mechanism in practice, and that's structural rather than
 a tuning failure. The hands are the top of the route, so nothing exists above them

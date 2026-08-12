@@ -12,7 +12,8 @@
     "sim": "node tools/sim-check.mjs",
     "measure": "node tools/measure.mjs",
     "ladder": "node tools/ladder.mjs",
-    "fuzz": "node tools/fuzz-drag.mjs"
+    "fuzz": "node tools/fuzz-drag.mjs",
+    "jitter": "node tools/jitter.mjs"
   },
   "devDependencies": {
     "vite": "^7.1.3"

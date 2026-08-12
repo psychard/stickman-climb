@@ -222,6 +222,38 @@ and migrates the body toward the globally-solved answer. Together these took the
 adversarial fuzzer from 254 bad runs in 300 to 1, and the auto-climber from failing
 every level to passing all five over the full route.
 
+### 2026-08-12 — the figure sometimes bounced in a loop
+
+Reported from play: "sometimes it gets jittery again — keeps bouncing in a loop or
+oscillating." It was three unrelated limit cycles, none of which the existing tools
+could see, because `sim` measured jitter only on the start stance — the quietest
+stance on the wall — and every other invariant was perfectly happy with a body that
+was bouncing. A new tool (`npm run jitter`) watches a second of no input after every
+move and again with the pointer held still, and scores **wander**: path length that
+went nowhere. It found a cycle in 11.5% of windows.
+
+The three causes were the **wedge escape** firing on a mid-substep transient that the
+solver was about to fix anyway and throwing the body 18u in response, the **drag
+lunge** being armed at one distance and aimed at a deeper one (a bang-bang controller
+that overshot its own dead zone at 60Hz), and the **foot push** being re-applied on
+every relaxation pass so it fought the reach clamps that were meant to arrest it.
+Down to 1.5% of windows, with settled stances at 0.2%.
+
+Two of the three had a knob that made the symptom disappear and the game worse —
+weakening the foot push stopped the bouncing and left the figure hanging off its arms
+instead of standing on its feet; weakening the drag stopped the ringing and dropped
+one grab in four. That is the argument for measuring the mechanism rather than tuning
+until it looks calm.
+
+**A new fall reason, `CAME OFF`.** The brief said you fall when all four limbs leave
+the wall or stamina runs out. There was a third case hiding in the design's claim that
+releasing a limb is always safe: let go of *both hands* and what remains is a body
+hanging from two feet, which the anatomical limits forbid outright, so no body
+position satisfies it and the solver draws a wreck. Physically you have just let go of
+the wall with nothing underneath you. So with no hand planted, the feet must be able
+to hold you alone — the same solvability test planting already uses — and you fall if
+they can't. Standing on a ledge is exactly that stance and is unaffected.
+
 ### Still open
 
 - Holds are still a direction-free quality scalar. No underclings, sidepulls or
@@ -229,7 +261,7 @@ every level to passing all five over the full route.
 - Fatigue is still one global bar, though strain is now computed per limb, so
   per-limb pump (and shaking out one arm) is a small step from here.
 - The generator only checks that stances are *possible*, not that they're good.
-  It produces walls where ~33% of bodyweight sits on the arms on an average
+  It produces walls where ~37% of bodyweight sits on the arms on an average
   stance and never tries to put the feet under the body, which is why rest
   positions are scarcer than they should be. This is the highest-value piece of
   work left.

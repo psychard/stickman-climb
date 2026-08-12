@@ -53,6 +53,16 @@ export function createFigure(stance) {
     chestV: { x: 0, y: 0 },
     limbs: {},
     falling: false,
+    // Worst constraint violation left standing at the END of the last substep.
+    // escapeWedge triggers on this rather than re-measuring mid-substep; see there.
+    violation: 0,
+    // Seconds escapeWedge has spent trying to fix the CURRENT set of holds, and
+    // what that set was, so a new stance gets a fresh budget. See escapeWedge.
+    wedgeSpent: 0,
+    wedgeHolds: [null, null, null, null],
+    // Seconds the violation has been catastrophic. A stance no body can hold is not
+    // a stance; the game reads this and drops you. See T.FALL_VIOLATION.
+    lostFor: 0,
   };
   for (const id of LIMB_IDS) {
     const def = LIMB_DEFS[id];
@@ -81,6 +91,8 @@ export function resetToStance(fig, stance) {
   fig.falling = false;
   fig.hipV = { x: 0, y: 0 };
   fig.chestV = { x: 0, y: 0 };
+  fig.violation = 0;
+  fig.lostFor = 0;
 
   const pts = {};
   for (const id of LIMB_IDS) pts[id] = fig.limbs[id].hold;
@@ -217,6 +229,32 @@ export function poseViolation(hip, chest, limb, pt) {
 }
 
 export const poseOk = (hip, chest, limb, pt) => poseViolation(hip, chest, limb, pt) < 1;
+
+/**
+ * Worst constraint violation of a body sitting on a set of holds, world units.
+ *
+ * The same measure `solveStatic` reports, so the two are comparable -- which is
+ * the whole basis of the wedge escape: "is the global answer better than the one
+ * we are sitting in?" is only a meaningful question if both are scored the same
+ * way. Dragged limbs are excluded: a limb being hauled is *supposed* to be
+ * somewhere its socket can't reach.
+ */
+export function bodyViolation(state, limbs) {
+  let worst = 0;
+  for (const limb of limbs) {
+    if (!limb.hold || limb.drag) continue;
+    const a = anchorOf(state.hip, state.chest, limb);
+    const spec = specFor(limb.kind);
+    const d = Math.hypot(limb.hold.x - a.x, limb.hold.y - a.y);
+    worst = Math.max(
+      worst,
+      d - spec.max,
+      spec.min - d,
+      poseViolation(state.hip, state.chest, limb, limb.hold),
+    );
+  }
+  return worst;
+}
 
 /** Where an unplanted limb hangs when nothing is holding it. */
 function dangleTarget(fig, limb) {
@@ -397,12 +435,65 @@ function enforceTorso(state) {
  * a permanent ~8 units of over-extended leg. Applying it once and then letting
  * the constraints project it is what makes a planted limb genuinely limit you.
  *
- * Only the shortfall past max reach moves the body: reaching for something the
- * limb can already touch must not haul the body along. And the upward component
+ * Only the shortfall past LUNGE_START moves the body: reaching for something the
+ * limb can comfortably touch must not haul the body along. And the upward component
  * is damped separately -- leaning sideways is nearly free, hauling yourself
  * upward is muscular work.
+ *
+ * HOW DEEP THE PULL AIMS DEPENDS ON WHETHER THE POINTER IS MOVING, and that is what
+ * reconciles the two things the lunge has to do.
+ *
+ * A pull that aims deeper than the threshold that armed it is a bang-bang
+ * controller. Aiming at LUNGE_SETTLE (0.84 of max) from a threshold at max reach
+ * meant a pointer one unit out of reach asked for six units of body travel; the body
+ * arrived four units INSIDE the dead zone where the pull is zero, gravity walked it
+ * back out, and it fired again -- a period-2 limit cycle at 60Hz, on a fifth of the
+ * stances tried, whenever a pointer was held still near full stretch. That is one of
+ * the three oscillators behind the reported jitter.
+ *
+ * But aiming at the threshold and nothing deeper costs grabs. At release the limb is
+ * drawn on the hold (the last few units are REACH_STRETCH, which is cosmetic) while
+ * the socket is a hair beyond max reach, so `canReach` refuses -- measured as ~50% of
+ * all missed grabs, with the endpoint a median 0.0u from the hold it just failed to
+ * take. That is exactly the knife edge LUNGE_SETTLE was introduced to avoid.
+ *
+ * The two failures live in different regimes: the ringing needs a pointer holding
+ * still, the knife edge needs one being hauled. So the aim interpolates on pointer
+ * speed. Hauling commits to LUNGE_SETTLE and the body comes deep inside reach;
+ * holding still relaxes the aim back to LUNGE_START, where the pull has a genuine
+ * equilibrium against the gravity sag and cannot ring. Fast attack and slow release
+ * on that estimate, so a moment's hesitation mid-reach doesn't drop the body back
+ * out from under the grab.
+ *
+ * DRAG_PULL is then bounded by stability: the pull moves the body by gain x
+ * shortfall, the anchor takes about three quarters of it, and past an effective gain
+ * of ~2 the body overshoots the threshold by more than it was short. Measured over
+ * 200 moves x 5 levels, plant rate plateaus at gain 2 and the only thing higher
+ * values buy is chatter -- 0 bouncing windows at 2.0, 53 at 6.0.
  */
-function applyDragPull(state, limbs) {
+/**
+ * How committed the player is to this drag, 0..1, from how fast their pointer is
+ * travelling. Kept on the drag object, so it starts fresh with every grab.
+ *
+ * Attack is fast and release is slow on purpose: the moment you start hauling, the
+ * body should commit; when you stop, it should relax back to the stable aim over a
+ * few tenths of a second rather than dropping out from under a grab you are still
+ * lining up. Pointer updates arrive once a frame and the solver runs at 120Hz, so
+ * half the substeps see no movement at all -- hence smoothing rather than the raw
+ * per-substep delta.
+ */
+function trackCommit(drag, dt) {
+  const prev = drag.prev;
+  const step = prev ? Math.hypot(drag.target.x - prev.x, drag.target.y - prev.y) : 0;
+  drag.prev = { x: drag.target.x, y: drag.target.y };
+  const speed = step / dt;
+  const now = drag.speed || 0;
+  const tau = speed > now ? T.LUNGE_SPEED_ATTACK : T.LUNGE_SPEED_RELEASE;
+  drag.speed = now + (speed - now) * Math.min(1, dt / tau);
+  return Math.min(1, drag.speed / T.LUNGE_COMMIT_SPEED);
+}
+
+function applyDragPull(state, limbs, dt) {
   // The shortfall is unbounded -- a pointer dragged to three times a limb's reach
   // asks for hundreds of units of body travel in a single 1/120s substep (measured
   // 555u), which hands the solver a wrecked configuration to recover from, and
@@ -423,8 +514,13 @@ function applyDragPull(state, limbs) {
     const dx = limb.drag.target.x - a.x;
     const dy = limb.drag.target.y - a.y;
     const d = Math.hypot(dx, dy);
-    if (d <= spec.max * T.LUNGE_START || d <= 1e-6) continue;
-    const move = (d - spec.max * T.LUNGE_SETTLE) * T.DRAG_PULL;
+    const commit = trackCommit(limb.drag, dt);
+    // ONE line, both armed and aimed at: the pull is off inside it and pulls to it
+    // from outside, so it always has an equilibrium and can never overshoot into its
+    // own dead zone. All that varies is how deep the line sits.
+    const aim = spec.max * (T.LUNGE_START + (T.LUNGE_SETTLE - T.LUNGE_START) * commit);
+    if (d <= aim || d <= 1e-6) continue;
+    const move = (d - aim) * T.DRAG_PULL;
     const cy = (dy / d) * move;
     const pull = { limb, x: (dx / d) * move, y: cy < 0 ? cy * T.DRAG_LIFT : cy };
     total += Math.hypot(pull.x, pull.y);
@@ -434,10 +530,36 @@ function applyDragPull(state, limbs) {
   for (const p of pulls) pushAnchor(state, p.limb, p.x * scale, p.y * scale);
 }
 
-/** One relaxation pass over all constraints. Mutates state.hip / state.chest. */
-function relaxOnce(state, limbs) {
-  // 2. planted feet push the body up off the hold (one-sided: legs press, they
-  //    never pull you back down)
+/**
+ * Planted feet press the body up off their hold -- legs are struts, and this is
+ * what makes the figure stand rather than hang. One-sided: a leg pushes when it is
+ * compressed below its preferred length and never pulls you back down.
+ *
+ * Applied ONCE per substep, as an external input alongside gravity and the drag,
+ * and for exactly the same reason: it is a soft displacement that the hard reach
+ * clamps have to be able to arrest. Re-applying it on every relaxation pass made it
+ * beat them -- 10 passes of it against 10 of the clamps, with the push re-injecting
+ * each time precisely what the clamp had just removed. On a stance with one leg at
+ * full extension and the other deeply folded (which is an ordinary high step) the
+ * two never reconciled: measured 60u of push against 60u of clamp every substep,
+ * for as long as you cared to watch, and a hip skittering 0.3-11u a substep. That
+ * is the third of the three oscillators behind the reported jitter, and the one
+ * that survived fixing the other two.
+ *
+ * `solveStatic` applies it the same way -- once per iteration, before the
+ * relaxation -- which is exactly what it did when this lived inside relaxOnce, so
+ * the generator's idea of a feasible stance is unchanged by the move.
+ *
+ * The press is also SATURATED at FOOT_PUSH_RATE. Proportional all the way down, a
+ * leg folded up under the hip (an ordinary high step, 14u on a leg whose preferred
+ * length is 60) asks to shove the body 10u in a single 1/120s substep, which no
+ * clamp reconciles and which alternated. Ordinary standing corrections are ~3u and
+ * are untouched by the cap, so this bounds the pathological end without weakening
+ * the mechanic -- lowering the stiffness instead did weaken it, and cost 0.1 of
+ * strain at rest because the figure hung off its arms rather than standing up.
+ */
+function applyFootPush(state, limbs, dt) {
+  const cap = T.FOOT_PUSH_RATE * dt;
   for (const limb of limbs) {
     if (!limb.hold || limb.drag || limb.kind !== 'foot') continue;
     const a = anchorOf(state.hip, state.chest, limb);
@@ -445,12 +567,24 @@ function relaxOnce(state, limbs) {
     const dx = limb.hold.x - a.x;
     const dy = limb.hold.y - a.y;
     const d = Math.hypot(dx, dy) || 1e-6;
-    if (d < spec.pref) {
-      const move = (d - spec.pref) * T.FOOT_PUSH_STIFF; // negative => push away
+    // Press toward slightly STRAIGHTER than the relaxed length, not to it. A
+    // one-shot press settles a few units short of its own target, because that is
+    // where it balances the gravity sag -- and those few units are the difference
+    // between standing on your feet and hanging off your arms. Measured: pressing
+    // to pref left 36% of bodyweight on the arms where the old (unstable) version
+    // managed 29%; pressing past it recovers that without a bigger shove per
+    // substep, which is what actually caused the oscillation.
+    const target = spec.pref * T.FOOT_PUSH_REACH;
+    if (d < target) {
+      // negative => push away from the hold
+      const move = -Math.min((target - d) * T.FOOT_PUSH_STIFF, cap);
       pushAnchor(state, limb, (dx / d) * move, (dy / d) * move);
     }
   }
+}
 
+/** One relaxation pass over all constraints. Mutates state.hip / state.chest. */
+function relaxOnce(state, limbs) {
   // 3. planted limbs clamp the body inside their reach envelope.
   //
   //    A limb is a strut of fixed maximum length, so a planted one LIMITS how
@@ -540,7 +674,8 @@ export function stepFigure(fig, dt) {
   fig.chest.y += sag;
 
   // external inputs first, then let the constraints resolve them
-  applyDragPull(fig, limbs);
+  applyFootPush(fig, limbs, dt);
+  applyDragPull(fig, limbs, dt);
   escapeWedge(fig, limbs, dt);
   for (let i = 0; i < T.ITERATIONS; i++) relaxOnce(fig, limbs);
   projectReach(fig, limbs);
@@ -552,6 +687,14 @@ export function stepFigure(fig, dt) {
   fig.hipV.y = (fig.hip.y - prevHip.y) * f;
   fig.chestV.x = (fig.chest.x - prevChest.x) * f;
   fig.chestV.y = (fig.chest.y - prevChest.y) * f;
+
+  // What the solver could NOT resolve, recorded where it actually stopped. This
+  // is the only honest place to judge whether the body is wedged, so it is what
+  // the next substep's escapeWedge triggers on.
+  fig.violation = bodyViolation(fig, limbs);
+  // ...and how long it has been catastrophic, which is the game's cue that you are
+  // no longer on the wall at all. See T.FALL_VIOLATION.
+  fig.lostFor = fig.violation > T.FALL_VIOLATION ? fig.lostFor + dt : 0;
 
   placeEndpoints(fig, limbs);
 }
@@ -572,8 +715,24 @@ export function stepFigure(fig, dt) {
  * demonstrably stuck and a genuinely better answer exists, migrate toward it.
  *
  * Only runs with nothing being dragged: mid-drag the body is supposed to be
- * hauled somewhere awkward, and this would fight the player. And it moves at a
- * bounded rate, so recovery reads as the figure settling rather than teleporting.
+ * hauled somewhere awkward, and this would fight the player.
+ *
+ * TRIGGER ON THE SETTLED VIOLATION, not a fresh mid-substep measurement. A wedge
+ * is by definition a fixed point of the solver, so the only place it can honestly
+ * be observed is where the solver stopped -- at the end of the previous substep,
+ * after projectReach. Measuring here instead means measuring a body that has just
+ * had momentum and a gravity sag added and has had no chance to resolve either,
+ * and that transient regularly clears WEDGE_TRIGGER on a stance whose settled
+ * violation is 0.00u. The cost was a limit cycle: the escape fired, threw the body
+ * 18u toward an answer it did not need, the legs pressed it back over the next six
+ * substeps, and it fired again -- a 12Hz bounce, on ~6% of route stances, which is
+ * exactly the intermittent jitter reported from play.
+ *
+ * Migration is bounded as a SPEED (WEDGE_RECOVER world units/s, WEDGE_TURN deg/s)
+ * rather than as a fraction of the distance remaining. `min(1, 90 * dt)` reads like
+ * a rate limit but is 75% of the way there per substep at 120Hz -- i.e. a teleport,
+ * and a teleport is what made the false positives so violent. Bounding the speed
+ * makes a false positive cost sub-unit motion instead of tens of units.
  *
  * Applied as an external displacement BEFORE the relaxation, alongside gravity and
  * the drag -- not after it. Nudging the body after the constraints have run just
@@ -582,28 +741,47 @@ export function stepFigure(fig, dt) {
  * to restore the torso length rather than breaking it.
  */
 function escapeWedge(fig, limbs, dt) {
-  if (limbs.some((l) => l.drag)) return;
+  // A new set of holds is a new problem, so it gets a fresh budget.
+  if (limbs.some((l, i) => l.hold !== fig.wedgeHolds[i])) {
+    for (let i = 0; i < limbs.length; i++) fig.wedgeHolds[i] = limbs[i].hold;
+    fig.wedgeSpent = 0;
+  }
+  // The player hauling the body about hands control back to them, so the budget
+  // resets outright.
+  if (limbs.some((l) => l.drag)) {
+    fig.wedgeSpent = 0;
+    return;
+  }
+  // Nothing to fix. The budget re-arms, but at a FRACTION of the rate it burns:
+  // resetting it outright the moment the violation cleared let the cycle refill it
+  // every time round, which is how a stance kept twitching through a budget meant
+  // to stop exactly that. Burning faster than it re-arms means a cycle always runs
+  // itself out, while a stance that is genuinely quiet for a second or so gets its
+  // escape back.
+  if (fig.violation < T.WEDGE_TRIGGER) {
+    fig.wedgeSpent = Math.max(0, fig.wedgeSpent - dt * T.WEDGE_REARM);
+    return;
+  }
+  // Tried this stance and got nowhere. Two solvers disagreeing forever is its own
+  // oscillator: the escape migrates toward the global answer, the local relaxation
+  // walks straight back, and the figure twitches at ~9Hz indefinitely. Sitting
+  // still in a slightly wrong pose looks far better than that, so the escape gets a
+  // bounded amount of time per stance and then leaves the body alone.
+  if (fig.wedgeSpent >= T.WEDGE_BUDGET) return;
 
   const pts = {};
-  let worst = 0;
   let n = 0;
   for (const limb of limbs) {
     if (!limb.hold) continue;
     pts[limb.id] = limb.hold;
     n++;
-    const a = anchorOf(fig.hip, fig.chest, limb);
-    const d = Math.hypot(limb.hold.x - a.x, limb.hold.y - a.y);
-    worst = Math.max(
-      worst,
-      d - specFor(limb.kind).max,
-      poseViolation(fig.hip, fig.chest, limb, limb.hold),
-    );
   }
-  if (n === 0 || worst < T.WEDGE_TRIGGER) return;
+  if (n === 0) return;
 
   const sol = solveStatic(pts);
   // only move if the global answer is meaningfully better than where we are
-  if (sol.violation > worst - T.WEDGE_TRIGGER) return;
+  if (sol.violation > fig.violation - T.WEDGE_TRIGGER) return;
+  fig.wedgeSpent += dt;
 
   // Move the midpoint, but ROTATE the torso rather than interpolating its two
   // ends. The wedged answer and the good one are usually mirrored -- the chest
@@ -612,7 +790,6 @@ function escapeWedge(fig, limbs, dt) {
   // whichever direction it likes, normally straight back into the wedge. Turning
   // the torso through the intervening angle is the motion that actually gets
   // there, and it looks like the figure rolling over rather than collapsing.
-  const k = Math.min(1, T.WEDGE_RECOVER * dt);
   const mid = { x: (fig.hip.x + fig.chest.x) / 2, y: (fig.hip.y + fig.chest.y) / 2 };
   const solMid = { x: (sol.hip.x + sol.chest.x) / 2, y: (sol.hip.y + sol.chest.y) / 2 };
   const ang = Math.atan2(fig.chest.x - fig.hip.x, -(fig.chest.y - fig.hip.y));
@@ -620,6 +797,26 @@ function escapeWedge(fig, limbs, dt) {
   let dAng = solAng - ang;
   while (dAng > Math.PI) dAng -= Math.PI * 2; // shortest way round
   while (dAng < -Math.PI) dAng += Math.PI * 2;
+
+  // How fast to migrate scales with how bad the wedge is. A mirrored torso at 60u
+  // of violation is a catastrophe and wants reorganising now; 2u is cosmetic, and
+  // correcting it at catastrophe speed is a 4u jolt that the local solver then
+  // undoes -- which is a sawtooth at ~9Hz, and was the last of the jitter left on
+  // the wall. Same rule, two very different urgencies.
+  const urgency = clamp(fig.violation / T.WEDGE_REF, 0, T.WEDGE_URGENCY_MAX);
+
+  // Bound translation and rotation independently, then take the tighter of the
+  // two: a mirrored torso can need a big turn with almost no travel, and lerping
+  // that in one substep is the snap this is supposed to avoid.
+  const dist = Math.hypot(solMid.x - mid.x, solMid.y - mid.y);
+  const turn = Math.abs(dAng);
+  const budget = T.WEDGE_RECOVER * urgency * dt;
+  const turnBudget = ((T.WEDGE_TURN * urgency * Math.PI) / 180) * dt;
+  const k = Math.min(
+    1,
+    dist > 1e-6 ? budget / dist : Infinity,
+    turn > 1e-6 ? turnBudget / turn : Infinity,
+  );
 
   const nx = mid.x + (solMid.x - mid.x) * k;
   const ny = mid.y + (solMid.y - mid.y) * k;
@@ -698,6 +895,14 @@ export function solveStatic(pts, iters = T.GEN_SOLVE_ITERS) {
     limbs.push({ ...LIMB_DEFS[id], id, hold: p, drag: null });
   }
 
+  // Nothing planted is vacuously solvable -- there are no constraints to satisfy.
+  // Callers reach this when asking whether an empty stance holds; falling on no
+  // contacts is a separate, earlier rule.
+  if (!limbs.length) {
+    const hip = { x: T.WALL_W / 2, y: 0 };
+    return { hip, chest: { x: hip.x, y: hip.y - T.TORSO_LEN }, violation: 0 };
+  }
+
   // seed from the hold centroids: chest below the hands, hip above the feet
   const hands = limbs.filter((l) => l.kind === 'hand');
   const feet = limbs.filter((l) => l.kind === 'foot');
@@ -722,25 +927,17 @@ export function solveStatic(pts, iters = T.GEN_SOLVE_ITERS) {
     const nudge = 1.2 * (1 - i / iters);
     state.hip.y += nudge;
     state.chest.y += nudge;
+    // external inputs then relaxation, the same order the live substep uses
+    applyFootPush(state, limbs, T.SUB_DT);
     relaxOnce(state, limbs);
   }
   // same projection the live solver applies, so the generator's idea of a
   // reachable stance matches what the game will actually allow
   projectReach(state, limbs);
 
-  let violation = 0;
-  for (const limb of limbs) {
-    const a = anchorOf(state.hip, state.chest, limb);
-    const spec = specFor(limb.kind);
-    const d = Math.hypot(limb.hold.x - a.x, limb.hold.y - a.y);
-    violation = Math.max(
-      violation,
-      d - spec.max, // includes feet: a stance needing a foot in tension is out
-      spec.min - d,
-      poseViolation(state.hip, state.chest, limb, limb.hold),
-    );
-  }
-  return { hip: state.hip, chest: state.chest, violation };
+  // Same measure the live body reports, so the wedge escape can compare the two.
+  // Includes feet, so a stance that would need a foot in tension is rejected.
+  return { hip: state.hip, chest: state.chest, violation: bodyViolation(state, limbs) };
 }
 
 /**
