@@ -69,14 +69,23 @@ export const T = {
   // and rotate rather than just slide.
   ANCHOR_SPLIT_NEAR: 0.75,
   UPRIGHT_STIFF: 0.012, // weak bias keeping the chest above the hip
-  FOOT_PUSH_STIFF: 0.9, // legs pressing the body up off a foothold
-  // ...saturating here, in world units per second. A deeply folded leg would
-  // otherwise ask to shove the body 10u in one substep -- four times gravity's sag
-  // -- which no clamp reconciles and which alternated at 60Hz. Ordinary standing
-  // corrections are ~3u/substep and sit well under this, so the mechanic is
-  // untouched: measured strain at rest is the same as before the cap, where
-  // softening the stiffness instead cost 0.1 of it.
+  // Legs pressing the body up off a foothold. Applied ONCE per substep as an
+  // external input (see applyFootPush) -- it used to run inside every relaxation
+  // pass, which is how it beat the reach clamps and oscillated. The stiffness is
+  // 4x what it was for exactly that reason: ten applications of 0.22 and one of 0.9
+  // have about the same authority per substep, and dropping the authority instead
+  // measured as the figure hanging off its arms (45% of bodyweight, vs 37% now).
+  FOOT_PUSH_STIFF: 0.9,
+  // ...saturating here, in world units per second. A leg folded up under the hip --
+  // an ordinary high step -- would otherwise ask to shove the body 10u in a single
+  // 1/120s substep, which no clamp reconciles and which alternated at 60Hz.
   FOOT_PUSH_RATE: 900,
+  // ...and pressing toward slightly STRAIGHTER than the relaxed leg length. A
+  // one-shot press settles a few units short of its own target, where it balances
+  // the gravity sag, and those few units are the difference between standing on your
+  // feet and hanging off your arms. Costs plant rate above ~1.1: the body stands
+  // taller, and holds that were a comfortable distance from the shoulder come in too
+  // close for canReach.
   FOOT_PUSH_REACH: 1.05,
   CLAMP_STIFF: 1.0, // hard min/max reach clamps (planted limbs tether here)
   PROJECT_PASSES: 16, // strict reach projection after relaxation; see projectReach
@@ -109,19 +118,20 @@ export const T = {
   WEDGE_TURN: 1200, // degrees / second at full urgency
   WEDGE_REF: 8, // violation counted as a full-urgency wedge, world units
   WEDGE_URGENCY_MAX: 4,
-  // How long the escape may keep pushing at one set of holds before giving up on
-  // it. Some stances have a better global answer that the local relaxation simply
-  // refuses to hold, and then the two solvers take turns forever -- measured as a
-  // 9Hz, 4u twitch that never ended. This is deliberately a hair under the 0.375s
-  // recovery lead `npm run fuzz` allows, so a genuine wedge still clears.
+  // How long the escape may keep pushing at one set of holds before giving up on it.
+  // Some stances have a better global answer that the local relaxation simply refuses
+  // to hold, and then the two solvers take turns forever -- measured as a 9Hz twitch
+  // that never ended. A second is generous on purpose: the urgency scaling above is
+  // what actually stops the twitching, and a budget tight enough to matter there
+  // (0.35s) cut short genuine recoveries in `npm run fuzz` and tripled its failures.
   WEDGE_BUDGET: 1.0, // seconds, per stance
   WEDGE_REARM: 0.25, // budget recovered per second of clean time, as a rate
-  // Applied once per substep (see applyDragPull), multiplying the shortfall past
-  // LUNGE_START. This is a stability limit, not a taste knob: the anchor takes ~3/4
-  // of the move, so past an effective gain of 1 the body overshoots the threshold,
-  // and past ~2 it overshoots by more than it was short, which rings. Measured over
-  // 200 moves x 5 levels, plant rate plateaus at 2.0 (94%) and the only thing
-  // higher values buy is chatter -- 0 bouncing windows at 2.0, 53 at 6.0.
+  // Applied once per substep (see applyDragPull), multiplying how far the pointer is
+  // past the lunge line. This is a stability limit, not a taste knob: the anchor
+  // takes ~3/4 of the move, so past an effective gain of 1 the body overshoots the
+  // line, and past ~2 it overshoots by more than it was short, which rings. Measured
+  // over 200 moves x 5 levels, plant rate plateaus at 2.0 (94%) and everything above
+  // buys chatter -- 0 bouncing windows at 2.0, 2 at 3.0, 53 at 6.0.
   //
   // It was 6.0 against an error term ~11u larger (the distance to a settle target
   // rather than the shortfall itself), which is a much gentler pull than the number
@@ -274,6 +284,28 @@ export const T = {
   HOLD_R_MIN: 3.5, // radius of a 0-quality crimp
   HOLD_R_MAX: 10, // radius of a 1-quality jug
 
+  // How a hold is DRAWN. Purely cosmetic -- the sim still sees one quality scalar
+  // (see the standing decisions in CLAUDE.md), and nothing here is read by body.js,
+  // wall.js or stamina.js. What it buys is legibility: size and a colour ramp alone
+  // meant every hold was the same blue circle at a slightly different diameter, and
+  // reading a wall meant squinting at diameters.
+  //
+  // Each kind covers a QUALITY BAND, and the bands overlap deliberately. Shape has
+  // to correlate with quality or it actively misleads -- quality is what drives
+  // strain, so a hold that looks like a jug must be a good one. But a strict
+  // one-shape-per-band mapping makes shape redundant with size and the wall reads
+  // banded, so the overlaps let a given quality pick from two or three silhouettes.
+  // The pick is a hash of the hold's own position, not the generator's rng, so
+  // adding or retuning kinds cannot shift a single hold: wall geometry is untouched
+  // and `verify` proves the same routes it did before.
+  HOLD_KINDS: [
+    { name: 'jug', from: 0.7, to: 1.01, col: '#5fd49b' },
+    { name: 'pocket', from: 0.5, to: 0.86, col: '#57b6e0' },
+    { name: 'pinch', from: 0.33, to: 0.68, col: '#9a8ce6' },
+    { name: 'sloper', from: 0.17, to: 0.47, col: '#d99a5f' },
+    { name: 'crimp', from: -0.01, to: 0.3, col: '#cf6f86' },
+  ],
+
   // -------------------------------------------------------------- generator ---
   SEED: 20260808, // seed for level 1; each level below carries its own
   ROUTE_MOVES: 600, // how many limb moves of guaranteed-climbable route
@@ -375,8 +407,8 @@ export const T = {
     planted: '#7dd3a0',
     dragging: '#ffd166',
     reach: 'rgba(255,209,102,0.16)',
+    // Fallback only -- a hold's colour comes from its kind (HOLD_KINDS).
     holdGood: '#5fb3d4',
-    holdBad: '#8d6b8f',
     inRange: '#ffd166',
     stamHi: '#7dd3a0',
     stamMid: '#ffd166',

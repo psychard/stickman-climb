@@ -37,7 +37,7 @@ Standing decisions, so they don't get relitigated by accident:
 |---|---|
 | **No depth axis.** The sim is 2D *in the wall plane*, so "hips in close to the wall" cannot be represented and true barn-dooring (which rotates out of plane) is not modelled. | Settled — deliberate |
 | **One global stamina bar**, though strain is computed per limb internally. Per-limb pump, and shaking out one arm, is a small step from here. | Deferred |
-| **Holds are a direction-free quality scalar.** No underclings, sidepulls or slopers that only work when pulled a particular way. | Deferred |
+| **Holds are a direction-free quality scalar** *to the sim*. They are now *drawn* as five kinds (jug, pocket, pinch, sloper, crimp) chosen from overlapping quality bands, but nothing outside `render.js` reads that. No underclings or sidepulls that only work when pulled a particular way. | Deferred (mechanically); the shapes are cosmetic |
 | **Nothing peels off a hold automatically.** Planted limbs limit reach; the player taps a limb to release it. | Settled — replaced auto-peel |
 | **Tap-to-release applies to hands too**, not only feet. | Settled, but flagged: a mistimed tap on a hand can drop you |
 | **Letting go of both hands is a fall** (`CAME OFF`) unless the feet alone can hold you. Hanging from two feet is anatomically impossible, so there is no body position to draw. | Settled — was an unnoticed hole in "releasing is always safe" |
@@ -119,7 +119,7 @@ optional given the wildcard.
 | `src/wall.js` | seeded generation, climbability proof, spatial index |
 | `src/stamina.js` | load distribution + the drain factors, as one `strain` scalar |
 | `src/game.js` | state, camera, drag interaction |
-| `src/render.js` | canvas drawing, the HUD, and the level menu |
+| `src/render.js` | canvas drawing, the HUD, the level menu, and the hold silhouettes |
 | `src/input.js` | Pointer Events plumbing |
 | `src/main.js` | canvas sizing, safe-area insets, frame loop |
 

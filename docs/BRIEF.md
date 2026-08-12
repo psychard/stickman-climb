@@ -254,6 +254,24 @@ the wall with nothing underneath you. So with no hand planted, the feet must be 
 to hold you alone — the same solvability test planting already uses — and you fall if
 they can't. Standing on a ledge is exactly that stance and is unaffected.
 
+### 2026-08-12 — holds are drawn as five kinds
+
+Requested after playing: the holds should look more clearly different. "Visual polish,
+art" was on the out-of-scope list; this part of it is in now, and for a reason that
+serves the prototype's question rather than decorating it — every hold was the same
+blue circle at a slightly different diameter, so reading a wall meant comparing
+diameters, and route-finding is most of what the player is actually doing.
+
+Holds are now drawn as a jug, pocket, pinch, sloper or crimp, each with its own colour
+and silhouette. **The sim is unchanged**: a hold is still one direction-free quality
+scalar, and nothing outside the renderer reads the kind. Shape is chosen from
+overlapping quality bands, so it correlates with quality — a hold that looks like a jug
+has to be a good one, because quality is what drives strain — while still giving a
+given quality two or three possible silhouettes so the wall doesn't read as banded.
+
+The kind is hashed from the hold's own position rather than drawn from the generator's
+random stream, so no wall geometry moved: `verify` produces byte-identical routes.
+
 ### Still open
 
 - Holds are still a direction-free quality scalar. No underclings, sidepulls or

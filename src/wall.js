@@ -40,8 +40,33 @@ function limbPriority(stance, step) {
 
 export const radiusForQuality = (q) => lerp(T.HOLD_R_MIN, T.HOLD_R_MAX, clamp01(q));
 
+/**
+ * Which silhouette this hold is drawn as. Cosmetic only -- see T.HOLD_KINDS.
+ *
+ * Deterministic from the hold's own position rather than drawn from the generator's
+ * rng, deliberately: consuming rng here would shift every subsequent sample and
+ * reshuffle the whole wall, so a purely visual change would move route geometry and
+ * invalidate every measured number in the repo. This way the walls are bit-identical
+ * to the ones before holds had shapes.
+ */
+function kindForHold(x, y, q) {
+  const kinds = T.HOLD_KINDS.filter((k) => q >= k.from && q < k.to);
+  if (!kinds.length) return T.HOLD_KINDS[T.HOLD_KINDS.length - 1];
+  // cheap integer hash of the position, stable across runs and platforms
+  const h = Math.abs(Math.round(x * 73856093) ^ Math.round(y * 19349663));
+  return kinds[h % kinds.length];
+}
+
 function makeHold(x, y, q, route) {
-  return { x, y, q: clamp01(q), r: radiusForQuality(q), route };
+  const quality = clamp01(q);
+  return {
+    x,
+    y,
+    q: quality,
+    r: radiusForQuality(quality),
+    route,
+    kind: kindForHold(x, y, quality),
+  };
 }
 
 /**

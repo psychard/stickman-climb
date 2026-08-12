@@ -261,21 +261,13 @@ export function draw(ctx, game) {
   for (const hold of visible) {
     const hx = toScreenX(hold.x);
     const hy = toScreenY(hold.y);
-    const r = hold.r * s;
-
-    // quality reads as colour + size: warm blue jug -> small dull crimp
-    ctx.beginPath();
-    ctx.arc(hx, hy, r, 0, Math.PI * 2);
-    ctx.fillStyle = mixColor(T.COL.holdBad, T.COL.holdGood, hold.q);
-    ctx.fill();
-    ctx.lineWidth = Math.max(1, 1.2 * s);
-    ctx.strokeStyle = `rgba(255,255,255,${0.1 + 0.22 * hold.q})`;
-    ctx.stroke();
+    drawHold(ctx, hold, hx, hy, hold.r * s, s);
 
     if (game.debug && hold.route) {
       ctx.beginPath();
-      ctx.arc(hx, hy, r + 3 * s, 0, Math.PI * 2);
+      ctx.arc(hx, hy, hold.r * s + 3 * s, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(125,211,160,0.5)';
+      ctx.lineWidth = Math.max(1, s);
       ctx.stroke();
     }
   }
@@ -303,6 +295,113 @@ export function draw(ctx, game) {
 
   // ------------------------------------------------------------------- hud
   drawHud(ctx, game);
+}
+
+/**
+ * One hold, drawn as its kind (T.HOLD_KINDS). Cosmetic, and the only place that
+ * knows about kinds -- the sim sees a quality scalar and nothing else.
+ *
+ * Every silhouette is built so the SIZE still reads as quality at a glance, because
+ * that is what the stamina model actually charges you for. What the shapes add is a
+ * second, redundant channel: a jug's deep incut lip, a pocket's hole, a pinch's
+ * groove, a sloper's featureless dome (drawn with no lip at all, because that is
+ * exactly what makes them hard), a crimp's thin edge. On a phone at arm's length
+ * the shape lands before the diameter does.
+ */
+function drawHold(ctx, hold, x, y, r, s) {
+  const base = hold.kind ? hold.kind.col : T.COL.holdGood;
+  // good holds sit brighter, so quality still reads within a kind's own band
+  const face = mixColor(shade(base, 0.55), base, 0.35 + 0.65 * hold.q);
+  const lip = mixColor(face, '#ffffff', 0.35);
+  const deep = shade(base, 0.4);
+  const edge = Math.max(1, 1.1 * s);
+  const name = hold.kind ? hold.kind.name : 'jug';
+
+  ctx.lineWidth = edge;
+
+  if (name === 'crimp') {
+    // a thin flat edge: wide, shallow, with a bright top lip and nothing under it
+    const w = r * 2.1;
+    const h = Math.max(2.5 * s, r * 0.9);
+    ctx.fillStyle = face;
+    roundRect(ctx, x - w / 2, y - h / 2, w, h, h * 0.45);
+    ctx.fill();
+    ctx.strokeStyle = lip;
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.42, y - h * 0.34);
+    ctx.lineTo(x + w * 0.42, y - h * 0.34);
+    ctx.stroke();
+    return;
+  }
+
+  if (name === 'sloper') {
+    // a rounded dome, flat-bottomed, no positive edge anywhere on it
+    ctx.beginPath();
+    ctx.arc(x, y + r * 0.35, r * 1.15, Math.PI, 0);
+    ctx.closePath();
+    const g = ctx.createLinearGradient(0, y - r, 0, y + r * 0.4);
+    g.addColorStop(0, lip);
+    g.addColorStop(1, deep);
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.strokeStyle = shade(base, 0.75);
+    ctx.stroke();
+    return;
+  }
+
+  if (name === 'pinch') {
+    // two faces you squeeze: a tall block split by a groove
+    const w = r * 1.5;
+    const h = r * 2.2;
+    ctx.fillStyle = face;
+    roundRect(ctx, x - w / 2, y - h / 2, w, h, r * 0.45);
+    ctx.fill();
+    ctx.strokeStyle = deep;
+    ctx.lineWidth = Math.max(1.4, r * 0.28);
+    ctx.beginPath();
+    ctx.moveTo(x, y - h * 0.3);
+    ctx.lineTo(x, y + h * 0.3);
+    ctx.stroke();
+    return;
+  }
+
+  if (name === 'pocket') {
+    // a round hold with a hole through it -- one or two fingers only
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = face;
+    ctx.fill();
+    ctx.strokeStyle = lip;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y - r * 0.1, Math.max(1.2 * s, r * 0.42), 0, Math.PI * 2);
+    ctx.fillStyle = shade(base, 0.28);
+    ctx.fill();
+    return;
+  }
+
+  // jug: a chunky bucket with a deep incut lip you can wrap a whole hand over.
+  // Drawn square-ish on purpose -- a circle is what the pocket is, and two round
+  // holds of similar size are exactly the pair that were indistinguishable before.
+  const w = r * 2;
+  const h = r * 1.7;
+  ctx.fillStyle = face;
+  roundRect(ctx, x - w / 2, y - h / 2, w, h, r * 0.5);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x - w * 0.32, y - h * 0.18);
+  ctx.lineTo(x + w * 0.32, y - h * 0.18);
+  ctx.strokeStyle = lip;
+  ctx.lineWidth = Math.max(1.6, r * 0.36);
+  ctx.lineCap = 'round';
+  ctx.stroke();
+  ctx.lineCap = 'butt';
+}
+
+/** Scale a colour toward black; `k` of 1 leaves it alone. */
+function shade(col, k) {
+  const [r, g, b] = parseCol(col);
+  return `rgb(${Math.round(r * k)},${Math.round(g * k)},${Math.round(b * k)})`;
 }
 
 function drawFigure(ctx, fig, sx, sy, s, debug, viewH) {
@@ -469,13 +568,20 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 function mixColor(a, b, t) {
-  const pa = parseHex(a);
-  const pb = parseHex(b);
+  const pa = parseCol(a);
+  const pb = parseCol(b);
   const k = clamp01(t);
   return `rgb(${Math.round(lerp(pa[0], pb[0], k))},${Math.round(lerp(pa[1], pb[1], k))},${Math.round(lerp(pa[2], pb[2], k))})`;
 }
 
-function parseHex(h) {
-  const n = parseInt(h.slice(1), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+/** Accepts '#rrggbb' or 'rgb(r,g,b)', so mixes and shades can be chained. */
+function parseCol(c) {
+  if (c[0] === '#') {
+    const n = parseInt(c.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  return c
+    .slice(c.indexOf('(') + 1, -1)
+    .split(',')
+    .map((v) => parseFloat(v));
 }
