@@ -10,6 +10,7 @@ import { T } from './tuning.js';
 import { createGame, update, render } from './game.js';
 import { attachInput } from './input.js';
 import { forceInstallHint } from './install.js';
+import { registerWorker, checkForUpdate, forceUpdateBand } from './update.js';
 
 const stage = document.getElementById('stage');
 const canvas = document.getElementById('view');
@@ -25,8 +26,16 @@ window.__game = game;
 
 // The home-screen nudge only draws on iOS in a browser tab, which means it never
 // appears on the machine it's developed on. __installHint(true) forces it on (and
-// __installHint(null) hands the decision back to the sniff).
+// __installHint(null) hands the decision back to the sniff). __updateBand(true)
+// does the same for the "new version ready" band, which needs a second build to
+// appear honestly.
 window.__installHint = forceInstallHint;
+window.__updateBand = forceUpdateBand;
+
+// Only a built site gets a service worker: one sitting in front of the dev
+// server serves you yesterday's bundle and wastes an afternoon. `vite preview`
+// is a real build, so the offline path can still be rehearsed locally.
+if (import.meta.env.PROD) registerWorker();
 
 function readSafeInsets() {
   const cs = getComputedStyle(probe);
@@ -71,6 +80,10 @@ if (window.visualViewport) window.visualViewport.addEventListener('resize', resi
 let last = performance.now();
 document.addEventListener('visibilitychange', () => {
   last = performance.now(); // don't integrate the time spent backgrounded
+  // Coming back to a home-screen app that has been open for days is the case
+  // that most needs an update check: iOS keeps the web view alive, so nothing
+  // else would ever ask.
+  if (!document.hidden) checkForUpdate();
 });
 
 function frame(now) {

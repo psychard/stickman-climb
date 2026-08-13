@@ -49,7 +49,8 @@ import {
   LIMB_IDS,
 } from './body.js';
 import { createStamina, updateStamina } from './stamina.js';
-import { draw, debugButtonRect, menuButtonRect, menuHit, hitsRect } from './render.js';
+import { draw, debugButtonRect, menuButtonRect, menuHit, hitsRect, updateBandRect } from './render.js';
+import { applyUpdate, checkForUpdate } from './update.js';
 
 export function createGame(canvas) {
   const game = {
@@ -95,6 +96,9 @@ export function createGame(canvas) {
     showMenu() {
       game.state = 'menu';
       game.pointers.clear();
+      // The menu is the only place an update can be announced, so it's the only
+      // place worth asking whether there is one. Throttled inside update.js.
+      checkForUpdate();
     },
 
     /** Pick a problem from the menu. The wall is built a frame later; see above. */
@@ -132,6 +136,13 @@ export function createGame(canvas) {
     // ---------------------------------------------------------------- input
     pointerDown(id, screenPt) {
       if (game.state === 'menu') {
+        // The update band sits below the grid and only exists while a new build
+        // is waiting, so it can't shadow a tile.
+        const band = updateBandRect(game.view);
+        if (band && hitsRect(band, screenPt)) {
+          applyUpdate();
+          return;
+        }
         const pick = menuHit(game.view, screenPt);
         if (pick) game.startProblem(pick.level, pick.index);
         return;

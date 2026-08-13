@@ -47,6 +47,7 @@ Standing decisions, so they don't get relitigated by accident:
 | **Difficulty is one scalar.** A level sets a *floor* under the same easy→hard number the height ramp already drives; there is no second difficulty system. | Settled |
 | **The reach affordance is rings on the holds, not a reach envelope.** A translucent `spec.max` disc around the socket was drawn and removed: a grab is gated on `canReach` (pose cone and a minimum distance too) and the body moves under the drag, so the disc drew a boundary that was neither the real limit nor a useful one. | Settled — don't reinstate the disc |
 | **Falling returns to the menu**, carrying the reason and height with it. There is no separate retry screen. | Settled |
+| **Offline is a cached shell, and an update is offered rather than applied.** A new build waits behind a band on the menu until it's tapped; nothing reloads mid-climb. | Settled |
 | **A wall is a short problem with a top**, not an endless climb: ~430u, ended by matching a finish hold with both hands. Six per level, in styles (traverse, foot match, reachy...), ticked off when topped. | Settled — replaced the endless wall |
 | **Two limbs may share a hold.** Always legal in the sim; now something the generator asks for, in the foot match and in every top-out. | Settled |
 
@@ -108,6 +109,75 @@ asset. Don't reintroduce a base without that half.
 
 To put a *different* project on its own `psychard.com` subdomain, follow
 [docs/PUBLISHING.md](docs/PUBLISHING.md) — this repo is its worked example.
+
+### Offline, and how an update reaches a phone
+
+A service worker caches the shell, so an installed copy plays with no network at
+all — which is the point of installing it, and the game needs the network for
+nothing once loaded: walls come from seeds, ticks live in `localStorage`, and no
+asset is fetched while you climb.
+
+`public/sw.js` is a **template, not a working file**: the `climb-service-worker`
+plugin in `vite.config.js` rewrites `dist/sw.js` with a build id and the list of
+files to precache. Only built sites register it (`import.meta.env.PROD`) — a
+worker in front of the dev server serves you yesterday's bundle and wastes an
+afternoon — and `vite preview` is a real build, so the whole thing can be
+rehearsed locally. Registration and the update state live in `src/update.js`.
+
+Five things here are load-bearing, and four of them were found by testing it
+rather than by reasoning about it:
+
+- **Navigations are network-first, everything else cache-first.** Cache-first
+  HTML is how a worker pins people to a build forever, which is far worse than
+  the ten minutes of staleness Pages' `max-age=600` can cause on its own. The
+  bundle is content-hashed, so those URLs are immutable and safe to serve from
+  cache; icons and the manifest are cached when first requested rather than
+  precached, since Android's 512px icons are three times the size of the game.
+- **`ignoreVary: true` on every cache read.** Without it offline is silently
+  broken: the Cache API honours `Vary`, a module script is fetched with CORS mode
+  and so carries an `Origin` header, and the copy precached by URL does not — so
+  under `vite preview` (`Vary: Origin`) or Pages (`Vary: Accept-Encoding`) the
+  bundle is in the cache and the page still fails to load. Nothing here varies by
+  request header.
+- **The offline fallback is the precached `index.html`, not the last one seen on
+  the network.** A worker precaches its HTML and its bundle together, so the
+  shell is always self-consistent; caching a fresh `index.html` on the way past
+  would pair it with a bundle that was never fetched if the network dropped in
+  between, and offline would be *broken* rather than one build behind.
+- **The build id must move whenever anything else does**, because the browser
+  only looks for a new worker when the bytes of `sw.js` change. It hashes
+  everything the build emitted *plus* the worker template (hashed before it's
+  stamped, to keep that from being circular) — otherwise a fix to the worker
+  inherits the previous build's cache, which is exactly where a fix to how the
+  cache is read would be least welcome.
+- **Removing this feature is not just deleting the file.** Workers already
+  registered on people's phones keep running; retiring it means shipping one
+  whose only job is to unregister itself.
+
+**Updates are announced, never applied underneath the player.** A new worker
+installs, precaches, and waits; the menu grows a band saying so; a tap activates
+it and reloads. `skipWaiting` on install would reload the page mid-problem and
+cost someone their attempt.
+
+The band asks whether the page is *actually* stale before showing itself, by
+asking the waiting worker which files it precached and looking for the script
+this page is running (`stale()` in `update.js`). Usually it isn't stale: HTML is
+network-first, so any launch with signal already loaded the newest bundle and
+only the worker is behind. Without that check the band would fire on the common
+path and offer to reload a page onto the code it is already running.
+
+Two caveats worth knowing:
+
+- **iOS deletes all script-writable storage after 7 days without a visit** — the
+  cache *and* the ticks in `localStorage` — for sites used in a browser tab.
+  Home-screen apps are exempt, which is another reason the install band exists.
+- **A resumed home-screen app never re-navigates**, so nothing would ever check
+  for a new build. Hence `checkForUpdate()` on `visibilitychange` and on
+  returning to the menu, throttled to a minute inside `update.js`.
+
+To test it: `npm run build`, start the `preview` config, load it, then stop the
+server and reload. It should play. `window.__updateBand(true)` forces the band on
+without a second build.
 
 The domain lives in this repo's Pages settings, not in a `CNAME` file: the
 Actions build type takes it from there, so `dist/` needs nothing added. DNS is a
@@ -176,12 +246,17 @@ Three things worth knowing before changing it:
   forces it on, `(null)` hands the decision back to the sniff.
 - **There is no dismiss button.** Installing is the dismissal, and it only ever
   appears on the menu — never over a climb.
-- **`showInstallHint(view)` gates both the layout and the draw**, and has to keep
-  doing so. The band is reserved out of `menuRects`' space rather than drawn over
-  the grid, but tiles clamp at `tileMin`, so under ~490 points of usable height
-  the grid overflows whatever is reserved (a landscape phone already does this
+- **`menuBand(view)` gates both the layout and the draw**, and has to keep doing
+  so. The band is reserved out of `menuRects`' space rather than drawn over the
+  grid, but tiles clamp at `tileMin`, so under ~490 points of usable height the
+  grid overflows whatever is reserved (a landscape phone already does this
   without the band) and it is hidden rather than left sitting on top of tappable
   tiles.
+
+There is **one band slot**, and the "new version ready" notice takes it when
+there is one: it is rarer, it is actionable, and tapping it makes it go away.
+That one is tappable and hit-tested (`updateBandRect`) before the grid; the
+install nudge is not.
 
 ## Layout
 
@@ -195,8 +270,10 @@ Three things worth knowing before changing it:
 | `src/render.js` | canvas drawing, the HUD, the level menu, and the hold silhouettes |
 | `src/input.js` | Pointer Events plumbing |
 | `src/install.js` | should the menu nudge you to install it to your home screen? |
+| `src/update.js` | service worker registration, and "a new build is waiting" |
 | `src/main.js` | canvas sizing, safe-area insets, frame loop |
 | `public/` | manifest and home-screen icons, copied verbatim to `dist/` |
+| `public/sw.js` | offline cache **template** — stamped into `dist/sw.js` at build time |
 
 Tuning constants live **only** in `src/tuning.js`. Don't inline magic numbers in
 the other modules; they get adjusted constantly and need to be in one place.

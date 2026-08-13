@@ -9,6 +9,7 @@ import { T, levelAt, lerp, clamp, clamp01 } from './tuning.js';
 import { LIMB_IDS, torsoFrame, anchorOf, specFor, ikJoint, centerOfMass } from './body.js';
 import { holdsInRange, styleFor, problemKey } from './wall.js';
 import { wantsInstallHint } from './install.js';
+import { updateReady } from './update.js';
 
 // HUD buttons sit in a row under the stamina bar, hence the vertical offset.
 const HUD_BTN = { w: 44, h: 30, top: 32, gap: 8 };
@@ -49,8 +50,8 @@ const MENU = {
   tileGap: 6,
   tileMin: 38, // never smaller than a comfortable thumb target
   tileMax: 62,
-  hint: 44, // the install nudge: two lines, only on iOS in a browser tab
-  hintGap: 10,
+  band: 44, // the notice at the foot of the menu: two lines, at most one at a time
+  bandGap: 10,
 };
 
 /**
@@ -68,11 +69,11 @@ export function menuRects(view) {
   const rows = T.LEVELS.length;
 
   const availTop = view.safe.top + MENU.header;
-  // The install nudge is reserved out of the grid's space rather than drawn over
-  // it, so a short window shrinks the tiles instead of hiding the bottom row
-  // under the banner. On a phone there is slack below the grid and nothing moves.
-  const hintH = showInstallHint(view) ? MENU.hint + MENU.hintGap : 0;
-  const availH = view.h - availTop - view.safe.bottom - MENU.footer - hintH;
+  // The band is reserved out of the grid's space rather than drawn over it, so a
+  // short window shrinks the tiles instead of hiding the bottom row underneath
+  // it. On a phone there is slack below the grid and nothing moves.
+  const bandH = menuBand(view) ? MENU.band + MENU.bandGap : 0;
+  const availH = view.h - availTop - view.safe.bottom - MENU.footer - bandH;
   const byWidth = (w - MENU.tileGap * (cols - 1)) / cols;
   const byHeight = (availH - (MENU.gap + MENU.label) * rows) / rows;
   const tile = clamp(Math.min(byWidth, byHeight), MENU.tileMin, MENU.tileMax);
@@ -98,37 +99,49 @@ export function menuRects(view) {
 }
 
 /**
- * Is the nudge wanted *and* is there room for it?
+ * Which notice sits at the foot of the menu: 'update', 'install', or none.
  *
- * Reserving space isn't enough on its own: tiles clamp at `tileMin`, so below
- * about 490 points of usable height the grid overflows whatever is left for it
- * (a landscape phone already does this without the banner) and a band drawn down
- * there would sit on top of tappable tiles. Both the layout and the draw ask
+ * At most one, and a waiting build outranks the install nudge -- it is rarer, it
+ * is actionable, and tapping it makes it go away for good.
+ *
+ * Wanting one isn't enough on its own: tiles clamp at `tileMin`, so below about
+ * 490 points of usable height the grid overflows whatever is reserved for the
+ * band (a landscape phone already does this without one) and a band drawn down
+ * there would sit on top of tappable tiles. The layout and the draw both ask
  * this one question, so they can't disagree about whether the band is there.
  */
-function showInstallHint(view) {
-  if (!wantsInstallHint()) return false;
+function menuBand(view) {
+  const kind = updateReady() ? 'update' : wantsInstallHint() ? 'install' : null;
+  if (!kind) return null;
   const rows = T.LEVELS.length;
   const need =
     MENU.header +
     MENU.footer +
-    MENU.hint +
-    MENU.hintGap +
+    MENU.band +
+    MENU.bandGap +
     rows * (MENU.tileMin + MENU.label) +
     (rows - 1) * MENU.gap;
-  return view.h - view.safe.top - view.safe.bottom >= need;
+  return view.h - view.safe.top - view.safe.bottom >= need ? kind : null;
 }
 
-/** The install nudge's band, just above the footer line. */
-function hintRect(view) {
+/** Where that notice sits: just above the footer line. */
+function bandRect(view) {
   const left = view.ox + view.safe.left + MENU.pad;
   const right = view.ox + view.playW - view.safe.right - MENU.pad;
   return {
     x: left,
-    y: view.h - view.safe.bottom - MENU.footer - MENU.hint,
+    y: view.h - view.safe.bottom - MENU.footer - MENU.band,
     w: right - left,
-    h: MENU.hint,
+    h: MENU.band,
   };
+}
+
+/**
+ * The update band's rect, or null when it isn't showing. Unlike the install
+ * nudge this one is tappable, so `game` hit-tests it before the grid.
+ */
+export function updateBandRect(view) {
+  return menuBand(view) === 'update' ? bandRect(view) : null;
 }
 
 /** `{ level, index }` of the problem tile under `pt`, or null. */
@@ -255,8 +268,10 @@ function drawMenu(ctx, game) {
     }
   }
 
-  // ------------------------------------------------------- the install nudge
-  if (showInstallHint(view)) drawInstallHint(ctx, view);
+  // -------------------------------------------------------------- the band
+  const band = menuBand(view);
+  if (band === 'update') drawUpdateBand(ctx, view);
+  else if (band === 'install') drawInstallHint(ctx, view);
 
   // ------------------------------------------------------------------ footer
   ctx.textAlign = 'center';
@@ -276,8 +291,35 @@ function drawMenu(ctx, game) {
  * It isn't dismissable: installing is the dismissal, and the only place it shows
  * is the screen you are already choosing something on -- never over a climb.
  */
+/**
+ * A new build is cached and waiting. Tapping it is what applies it, and the menu
+ * is the only place it appears -- applying reloads the page, which mid-problem
+ * would throw away the attempt.
+ */
+function drawUpdateBand(ctx, view) {
+  const r = bandRect(view);
+  const cx = r.x + r.w / 2;
+
+  ctx.fillStyle = 'rgba(125,211,160,0.12)';
+  roundRect(ctx, r.x, r.y, r.w, r.h, 10);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(125,211,160,0.4)';
+  ctx.lineWidth = 1;
+  roundRect(ctx, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, 10);
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.font = '600 12px ui-monospace, monospace';
+  ctx.fillStyle = T.COL.stamHi;
+  ctx.fillText('new version ready', cx, r.y + 18);
+  ctx.font = '11px ui-monospace, monospace';
+  ctx.fillStyle = T.COL.textDim;
+  ctx.fillText('tap to update  ·  your ticks are kept', cx, r.y + 34);
+  ctx.textAlign = 'left';
+}
+
 function drawInstallHint(ctx, view) {
-  const r = hintRect(view);
+  const r = bandRect(view);
   const cx = r.x + r.w / 2;
 
   ctx.fillStyle = 'rgba(255,209,102,0.09)';
