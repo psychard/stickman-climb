@@ -1,8 +1,12 @@
 # climb
 
 A 2D bouldering game prototype for iPhone Safari. You drag a stick figure's hands
-and feet onto holds, one limb at a time or several at once, and try to get up the
-wall before your stamina runs out.
+and feet onto holds, one limb at a time or several at once, and try to top the
+problem before your stamina runs out.
+
+Thirty problems: five difficulties, six problems each, every one a short sequence
+you can read from the ground. They come in styles -- a traverse, one that wants
+both feet on the same hold, a reachy one -- and they are ticked off when topped.
 
 The point of the prototype is to find out whether dragging limbs around a wall
 feels good. See [docs/BRIEF.md](docs/BRIEF.md) for scope and intent.
@@ -42,7 +46,11 @@ ngrok domains.
   can move, so if a hold is out of reach, letting go of a trailing foot buys you
   the stretch — at the cost of holding the position on what's left. Nothing ever
   comes off the wall on its own.
-- You fall if **all four limbs** come off the wall, or if **stamina** hits zero.
+- **Top out by matching the finish hold with both hands** and holding it for a
+  moment. The top is ringed and labelled; controlling it is the last move, the way
+  it is in a real gym.
+- You fall if **all four limbs** come off the wall, if **stamina** hits zero, or if
+  you let go of both hands somewhere your feet can't hold you on their own.
 - Stamina drains from bad holds, bent limbs, being off-balance, and weight on
   your arms — and it comes back on a straight-armed, balanced, footed rest.
 
@@ -51,14 +59,18 @@ Tap `dbg` (or press `D`) for the strain breakdown and frame timings. `R` restart
 ## Checks
 
 ```bash
-npm run verify   # every generated wall is climbable, across many seeds
-npm run sim      # headless auto-climber: plant rate, stability, stamina curve
+npm run verify   # every problem is climbable and can be topped out
+npm run sim      # headless auto-climber: plant rate, top-outs, stability, stamina
+npm run jitter   # does the body ever settle into a bouncing loop?
+npm run fuzz     # haul three limbs at once to absurd places; can the body break?
+npm run ladder   # are the five difficulties actually five difficulties?
+npm run measure  # what the biophysics model does, in numbers
 ```
 
-`verify` re-proves each route stance against the static solver. `sim` replays the
-same routes through the live per-frame physics, and fails if the hanging figure
-oscillates or grabs start missing. Run both after touching `src/tuning.js` or
-`src/body.js`.
+`verify` re-proves every stance of all thirty problems against the static solver,
+including the two that make up the top-out. `sim` replays the same routes through
+the live per-frame physics and fails if grabs start missing or a problem stops
+being toppable. Run both after touching `src/tuning.js` or `src/body.js`.
 
 ## Layout
 

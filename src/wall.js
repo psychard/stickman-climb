@@ -84,15 +84,38 @@ function startStance() {
   };
 }
 
+/** The style a problem is built in; see T.STYLES. */
+export const styleFor = (index) => T.STYLES[((index % T.STYLES.length) + T.STYLES.length) % T.STYLES.length];
+
 /**
- * `level` is an index into T.LEVELS; it only enters through `difficultyAt`, as a
- * floor under the same scalar the height ramp drives. Nothing about the
- * climbability guarantee changes with it -- a harder level makes the generator
- * ask for more and get refused more often (watch `rejected` and `shrinks`), but
- * a hold is still only committed if the resulting stance solves.
+ * A problem's seed. Derived from its level's seed so the whole set is fixed by the
+ * five numbers in T.LEVELS, and stable: the same problem is the same wall forever,
+ * which is what makes ticking one off mean anything.
  */
-export function generateWall(seed = T.SEED, level = 0, moves = T.ROUTE_MOVES) {
+export const problemSeed = (level, index) => levelAt(level).seed + index * 7919 + 13;
+
+/**
+ * How a problem is identified in saved progress. Lives here, next to the seed, so the
+ * menu and the game agree on it by construction rather than by both formatting the
+ * same string.
+ */
+export const problemKey = (level, index) => `${level}:${index}`;
+
+/**
+ * One boulder problem: a short, finite wall that ends at a hold you match with both
+ * hands.
+ *
+ * `level` is an index into T.LEVELS and enters only through `difficultyAt`, as a
+ * floor under the same scalar the height ramp drives. `index` picks the style (see
+ * T.STYLES) and the seed. Nothing about the climbability guarantee changes with
+ * either: a hold is committed only if the resulting stance solves, and that now
+ * includes the two stances that make up the top-out -- one hand on the finish, then
+ * both.
+ */
+export function generateProblem(level = 0, index = 0) {
   const { floor } = levelAt(level);
+  const style = styleFor(index);
+  const seed = problemSeed(level, index);
   const rng = makeRng(seed);
   const holds = [];
   const stance = startStance();
@@ -104,106 +127,237 @@ export function generateWall(seed = T.SEED, level = 0, moves = T.ROUTE_MOVES) {
   // The route is the ordered list of moves, NOT the holds array: with reuse, one
   // hold serves several moves and a hold no longer belongs to a single limb.
   const route = [];
+  const stats = { rejected: 0, shrinks: 0, reused: 0, matches: 0 };
+  // Traverses pick a side, so the six problems on a level don't all lean the same
+  // way. Drawn before anything else so it can't shift with generator retuning.
+  const dir = rng() < 0.5 ? -1 : 1;
+  const ctx = { rng, holds, stance, route, floor, style, stats, dir };
 
-  let rejected = 0;
-  let shrinks = 0;
-  let reused = 0;
+  const startY = Math.min(stance.LH.y, stance.RH.y);
+  const targetY = startY - T.PROBLEM_RISE * style.rise;
+  // The required feature, if this style has one, goes in once the route is well
+  // clear of the start stance -- a match on the second move is not a puzzle.
+  let feature = style.feature || null;
+  let matchStance = null;
 
-  for (let step = 0; step < moves; step++) {
-    let placed = null;
-    let placedId = null;
-    let isNew = false;
+  let step = 0;
+  let finish = null;
+  while (step < T.PROBLEM_MOVE_CAP) {
+    const high = Math.min(stance.LH.y, stance.RH.y);
+    const done = (startY - high) / (startY - targetY);
 
-    for (const id of limbPriority(stance, step)) {
-      const cur = stance[id];
-      const diff = difficultyAt(-cur.y, floor);
-      const baseDist = lerp(T.MOVE_DIST.easy, T.MOVE_DIST.hard, diff);
-      // where the route "wants" to be at this height -- a slow sine traverse
-      const drift =
-        T.WALL_W / 2 +
-        Math.sin(-cur.y / T.MOVE_DRIFT.period) * T.WALL_W * T.MOVE_DRIFT.amp;
-      const bias = (drift - cur.x) * T.MOVE_DRIFT.pull;
-
-      // Try to move onto a hold that is already on the wall before inventing a
-      // new one. This is the only lever that genuinely thins the wall: a hold
-      // placed for a hand is at foot height a body-length later, so a foot can
-      // step onto it and the move costs nothing. Reuse rises with difficulty,
-      // which is what turns a staircase into a sequence you have to solve.
-      const reuse = lerp(T.REUSE.easy, T.REUSE.hard, diff);
-      if (reuse > 0 && rng() < reuse) {
-        placed = pickReusable(holds, stance, id, cur, baseDist, bias);
-        if (placed) {
-          placedId = id;
-          reused++;
-          break;
-        }
+    if (feature === 'footmatch' && done > 0.45) {
+      const match = tryFootMatch(ctx);
+      if (match) {
+        feature = null;
+        matchStance = match;
+        stats.matches++;
+        step++;
+        continue;
       }
-
-      // Ask for a big move first; if the body can't hold the resulting stance,
-      // back off and ask for less. This is what keeps hard sections climbable.
-      for (let shrink = 0; shrink < 4 && !placed; shrink++) {
-        const dist = baseDist * Math.pow(0.72, shrink);
-        if (shrink > 0) shrinks++;
-
-        for (let attempt = 0; attempt < T.GEN_CANDIDATES; attempt++) {
-          const dx = bias + rng.range(-T.MOVE_SPREAD, T.MOVE_SPREAD);
-          const dy = -rng.range(dist * 0.45, dist * 1.1);
-          const x = clamp(cur.x + dx, EDGE_MARGIN, T.WALL_W - EDGE_MARGIN);
-          const cand = { x, y: cur.y + dy };
-
-          if (nearestHold(holds, cand, T.FILL_MIN_GAP * 0.7)) {
-            rejected++;
-            continue;
-          }
-          if (!stanceFeasible({ ...stance, [id]: cand })) {
-            rejected++;
-            continue;
-          }
-
-          const q = clamp01(
-            lerp(T.QUALITY_ROUTE.easy, T.QUALITY_ROUTE.hard, diff) +
-              rng.range(-T.QUALITY_JITTER, T.QUALITY_JITTER),
-          );
-          placed = makeHold(cand.x, cand.y, q, true);
-          placedId = id;
-          isNew = true;
-          break;
-        }
-      }
-      if (placed) break;
     }
 
-    // No limb could move anywhere legal. Stop rather than emit a wall with an
-    // impossible move in it -- the climbability guarantee is the whole point.
-    if (!placed) break;
-
-    stance[placedId] = placed;
-    route.push({ limb: placedId, hold: placed });
-    if (isNew) holds.push(placed);
+    if (high <= targetY) {
+      finish = placeFinish(ctx);
+      if (finish) break;
+      // Nowhere to top out from here; take another move and ask again.
+    }
+    if (!advance(ctx, step)) break;
+    step++;
+  }
+  // Ran out of moves before topping out. Keep asking with the stance as it is --
+  // this is rare, and a problem with no top is not a problem.
+  for (let i = 0; !finish && i < 8; i++) {
+    finish = placeFinish(ctx);
+    if (!finish && !advance(ctx, step++)) break;
   }
 
   const topY = holds.reduce((m, h) => Math.min(m, h.y), 0);
-  addFiller(holds, rng, topY, floor);
+  addFiller(holds, rng, topY, floor, matchStance);
 
   const wall = {
     seed,
     level,
+    index,
+    style,
     holds,
     start,
     route,
     topY,
+    finish,
     bands: new Map(),
     stats: {
       route: holds.filter((h) => h.route).length,
       total: holds.length,
       moves: route.length,
-      reused,
-      rejected,
-      shrinks,
+      reused: stats.reused,
+      rejected: stats.rejected,
+      shrinks: stats.shrinks,
+      matches: stats.matches,
+      rise: startY - (finish ? finish.y : topY),
+      // how far across the wall the ROUTE travels, which is what a traverse is
+      span:
+        route.reduce((m, mv) => Math.max(m, mv.hold.x), 0) -
+        route.reduce((m, mv) => Math.min(m, mv.hold.x), T.WALL_W),
     },
   };
   indexHolds(wall);
   return wall;
+}
+
+/**
+ * Move one limb, best candidate first, exactly as the endless wall used to. Returns
+ * true if it committed a move. Every acceptance goes through `stanceFeasible`, which
+ * runs the real body solver, so the route stays climbable by construction.
+ */
+function advance(ctx, step) {
+  const { rng, holds, stance, route, floor, style, stats } = ctx;
+  let placed = null;
+  let placedId = null;
+  let isNew = false;
+
+  for (const id of limbPriority(stance, step)) {
+    const cur = stance[id];
+    const diff = difficultyAt(-cur.y, floor);
+    const baseDist = lerp(T.MOVE_DIST.easy, T.MOVE_DIST.hard, diff) * style.dist;
+    // where the route "wants" to be at this height -- a slow sine traverse, whose
+    // amplitude the style scales. A traverse is the same walk with the sideways
+    // ask turned up and the upward one turned down.
+    // A traverse names a point on the far side and pulls hard toward it. Turning
+    // the sine's amplitude up instead does almost nothing over a problem this
+    // short -- a quarter-period of a 900u sine across 250u of climbing is nearly a
+    // straight line, which is how the first attempt produced traverses that went
+    // no further sideways than an ordinary problem did.
+    const amp = T.MOVE_DRIFT.amp * style.drift;
+    const drift = style.cross
+      ? T.WALL_W / 2 + ctx.dir * style.cross * T.WALL_W
+      : T.WALL_W / 2 + Math.sin(-cur.y / T.MOVE_DRIFT.period) * T.WALL_W * amp * ctx.dir;
+    const pull = style.pull || T.MOVE_DRIFT.pull;
+    const bias = (clamp(drift, EDGE_MARGIN, T.WALL_W - EDGE_MARGIN) - cur.x) * pull;
+
+    // Try to move onto a hold that is already on the wall before inventing a
+    // new one. This is the only lever that genuinely thins the wall: a hold
+    // placed for a hand is at foot height a body-length later, so a foot can
+    // step onto it and the move costs nothing. Reuse rises with difficulty,
+    // which is what turns a staircase into a sequence you have to solve.
+    const reuse = lerp(T.REUSE.easy, T.REUSE.hard, diff);
+    if (reuse > 0 && rng() < reuse) {
+      placed = pickReusable(holds, stance, id, cur, baseDist, bias);
+      if (placed) {
+        placedId = id;
+        stats.reused++;
+        break;
+      }
+    }
+
+    // Ask for a big move first; if the body can't hold the resulting stance,
+    // back off and ask for less. This is what keeps hard sections climbable.
+    for (let shrink = 0; shrink < 4 && !placed; shrink++) {
+      const dist = baseDist * Math.pow(0.72, shrink);
+      if (shrink > 0) stats.shrinks++;
+
+      for (let attempt = 0; attempt < T.GEN_CANDIDATES; attempt++) {
+        const dx = bias + rng.range(-T.MOVE_SPREAD, T.MOVE_SPREAD);
+        const dy = -rng.range(dist * 0.45, dist * 1.1);
+        const x = clamp(cur.x + dx, EDGE_MARGIN, T.WALL_W - EDGE_MARGIN);
+        const cand = { x, y: cur.y + dy };
+
+        if (nearestHold(holds, cand, T.FILL_MIN_GAP * 0.7)) {
+          stats.rejected++;
+          continue;
+        }
+        if (!stanceFeasible({ ...stance, [id]: cand })) {
+          stats.rejected++;
+          continue;
+        }
+
+        const q = clamp01(
+          lerp(T.QUALITY_ROUTE.easy, T.QUALITY_ROUTE.hard, diff) +
+            rng.range(-T.QUALITY_JITTER, T.QUALITY_JITTER),
+        );
+        placed = makeHold(cand.x, cand.y, q, true);
+        placedId = id;
+        isNew = true;
+        break;
+      }
+    }
+    if (placed) break;
+  }
+
+  // No limb could move anywhere legal. The caller stops rather than emit a wall
+  // with an impossible move in it -- the climbability guarantee is the whole point.
+  if (!placed) return false;
+
+  stance[placedId] = placed;
+  route.push({ limb: placedId, hold: placed });
+  if (isNew) holds.push(placed);
+  return true;
+}
+
+/**
+ * Step the trailing foot onto the hold the other one is already on.
+ *
+ * Two limbs sharing a hold is ordinary climbing and the sim has always allowed it
+ * (nothing checks occupancy), but the generator never produced it, so the move
+ * existed and no wall ever asked for it. It is proven like any other: the resulting
+ * stance, with both feet on one point, has to solve.
+ *
+ * Returns the stance the match was made from, so the filler pass can keep the
+ * alternatives away and leave the match as the move that's actually there.
+ */
+function tryFootMatch(ctx) {
+  const { stance, route, stats } = ctx;
+  // the trailing foot is the lower one; y grows downward
+  const [trail, lead] = stance.LF.y > stance.RF.y ? ['LF', 'RF'] : ['RF', 'LF'];
+  const target = stance[lead];
+  if (stance[trail] === target) return null;
+  if (!stanceFeasible({ ...stance, [trail]: target })) return null;
+
+  const from = { ...stance };
+  stance[trail] = target;
+  route.push({ limb: trail, hold: target, match: true });
+  void stats;
+  return { limb: trail, hold: target, from };
+}
+
+/**
+ * The top: a hold placed so that one hand can reach it from the current stance, and
+ * then the OTHER hand can match it. Both stances are proven, so a problem always has
+ * a legal way to finish rather than a hold near the top that happens to be there.
+ *
+ * The finish is deliberately a good hold. A top-out you can only just hold with one
+ * hand is a coin flip rather than a climax, and the difficulty of a problem is meant
+ * to live in its middle.
+ */
+function placeFinish(ctx) {
+  const { rng, holds, stance, route, floor, style } = ctx;
+  // the lagging hand goes first, the way a climber tops out
+  const [first, second] = stance.LH.y > stance.RH.y ? ['LH', 'RH'] : ['RH', 'LH'];
+  const cur = stance[first];
+  const diff = difficultyAt(-cur.y, floor);
+  const dist = lerp(T.MOVE_DIST.easy, T.MOVE_DIST.hard, diff) * style.dist;
+
+  for (let attempt = 0; attempt < T.TOP_TRIES; attempt++) {
+    const dx = rng.range(-T.MOVE_SPREAD, T.MOVE_SPREAD);
+    const dy = -rng.range(dist * 0.4, dist * 0.95);
+    const x = clamp(cur.x + dx, EDGE_MARGIN, T.WALL_W - EDGE_MARGIN);
+    const cand = { x, y: cur.y + dy };
+    if (nearestHold(holds, cand, T.FILL_MIN_GAP)) continue;
+    // reachable one-handed from here...
+    if (!stanceFeasible({ ...stance, [first]: cand })) continue;
+    // ...and holdable with both hands on it, which is what tops the problem
+    if (!stanceFeasible({ ...stance, [first]: cand, [second]: cand })) continue;
+
+    const hold = makeHold(cand.x, cand.y, T.QUALITY_ROUTE.easy, true);
+    hold.finish = true;
+    holds.push(hold);
+    stance[first] = hold;
+    route.push({ limb: first, hold });
+    stance[second] = hold;
+    route.push({ limb: second, hold, match: true });
+    return hold;
+  }
+  return null;
 }
 
 /**
@@ -275,8 +429,18 @@ export function routeStances(wall) {
   return out;
 }
 
-/** Scatter non-route holds so the wall reads as a wall. Density falls with height. */
-function addFiller(holds, rng, topY, floor) {
+/**
+ * Scatter non-route holds so the wall reads as a wall. Density falls with height.
+ *
+ * `matchStance` is the foot match, if the style has one. Filler is kept a leg's
+ * reach away from it, because a required move is only required if there is nothing
+ * else to stand on -- drop one decorative chip beside the matched hold and the whole
+ * point of the problem evaporates. Route holds in that area are left alone: they are
+ * load-bearing for the sequence, so the match is the natural move rather than a
+ * forced one, and that is the honest claim to make about it.
+ */
+function addFiller(holds, rng, topY, floor, matchStance = null) {
+  const guard = matchStance ? matchStance.hold : null;
   const route = holds.filter((h) => h.route);
   for (const h of route) {
     const diff = difficultyAt(-h.y, floor);
@@ -289,6 +453,7 @@ function addFiller(holds, rng, topY, floor) {
         T.WALL_W - EDGE_MARGIN,
       );
       const y = clamp(h.y + rng.range(-70, 70), topY, -20);
+      if (guard && Math.hypot(x - guard.x, y - guard.y) < T.LEG.max) continue;
       if (nearestHold(holds, { x, y }, T.FILL_MIN_GAP)) continue;
       const q = clamp01(
         lerp(T.QUALITY_FILL.easy, T.QUALITY_FILL.hard, diff) +

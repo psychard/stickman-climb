@@ -24,7 +24,7 @@
  */
 
 import { T } from '../src/tuning.js';
-import { generateWall, holdsNear } from '../src/wall.js';
+import { generateProblem, holdsNear } from '../src/wall.js';
 import {
   createFigure,
   stepFigure,
@@ -184,7 +184,9 @@ function fuzz(seed, wall, moves = 40) {
   return worst;
 }
 
-const wall = generateWall(T.SEED, 0);
+// Any problem serves as scenery -- the fuzzer hauls limbs to arbitrary points and
+// mostly misses the holds entirely. Level 3's first problem is a middling wall.
+const wall = generateProblem(2, 0);
 const seeds = onlySeed !== null ? [onlySeed] : Array.from({ length: rounds }, (_, i) => 9000 + i * 13);
 
 const agg = { stretch: 0, torso: 0, invert: 0, pose: 0 };

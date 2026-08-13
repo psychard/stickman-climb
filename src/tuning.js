@@ -233,14 +233,21 @@ export const T = {
   W_FLEX: 0.4,
   W_BALANCE: 0.45,
   W_ARMLOAD: 0.45, // cost of simply having weight on your arms
-  // Calibrated against the measured spread of real route stances, which runs
-  // p25 0.30 / median 0.38 / p90 0.66, so roughly the best third of positions on the
-  // wall offer a rest and you have to hunt for them. Harder levels get far fewer by
-  // design. Re-measure with `npm run measure` if the strain terms change -- and note
-  // that a SOLVER change moves this too: the jitter fix left the figure standing a
-  // little lower (37% of bodyweight on the arms, up from 29%), which pushed every
-  // stance's strain up ~0.02 and cost 8 points of rest fraction until this followed.
-  REST_STRAIN: 0.32,
+  // Calibrated against the measured spread of real problem stances on level 1, which
+  // runs p25 0.21 / median 0.30 / p90 0.49. Roughly the best 40% of positions on the
+  // easiest level offer a rest, falling to 5% on the hardest -- see `npm run ladder`.
+  //
+  // That is more generous on level 1 than the old "best third of an endless wall",
+  // and deliberately: a problem is 30-odd moves, so stamina is a pace to keep rather
+  // than a fuel gauge to eke out, and the level that says "jugs all the way up" should
+  // let you stop and look at the sequence. The bite is at the top of the ladder, where
+  // a problem is a race you have to have read in advance.
+  //
+  // Re-measure with `npm run measure` if the strain terms change -- and note that a
+  // SOLVER change moves this too: the oscillation fix left the figure standing a
+  // little lower (35% of bodyweight on the arms, up from 29%), which pushed every
+  // stance's strain up and would have quietly cost you a chunk of rest fraction.
+  REST_STRAIN: 0.26,
 
   DRAIN_RATE: 0.16, // stamina/sec per unit of net strain
   RECOVER_RATE: 0.5, // stamina/sec per unit of net (negative) strain
@@ -308,7 +315,6 @@ export const T = {
 
   // -------------------------------------------------------------- generator ---
   SEED: 20260808, // seed for level 1; each level below carries its own
-  ROUTE_MOVES: 600, // how many limb moves of guaranteed-climbable route
   GEN_CANDIDATES: 48, // sampling attempts per move before relaxing the ask
   GEN_SOLVE_ITERS: 60, // relaxation passes in the headless feasibility check
   // Feasible stances converge to ~0 violation and impossible ones sit tens of
@@ -354,6 +360,62 @@ export const T = {
     { name: 'PROJECT', blurb: 'nothing given away', floor: 1.0, seed: 262147 },
   ],
   MOVE_DIST: { easy: 52, hard: 84 }, // target reach per move, lerped by difficulty
+
+  // ------------------------------------------------------------- problems ---
+  // Each level holds this many separate boulder problems, and a problem is SHORT:
+  // it ends at a finish hold you have to match with both hands. The wall used to be
+  // effectively endless (600 moves, ~8500u) and that made it a marathon -- you never
+  // saw the end of one, so there was nothing to solve, only somewhere to get tired.
+  // A problem is about four body lengths, which fits most of a phone screen and can
+  // be read as a whole before you start pulling.
+  PROBLEMS_PER_LEVEL: 6,
+  PROBLEM_RISE: 430, // world units of climbing before the generator looks for a top
+  PROBLEM_MOVE_CAP: 90, // stop asking if a problem somehow won't finish
+  TOP_TRIES: 26, // candidate finish positions tried per attempt
+  // Both hands on the finish hold, held for this long, tops the problem. The delay
+  // is the bouldering rule -- you have to *control* the top, not slap it -- and it
+  // also stops a wobble through the hold registering as a send.
+  TOP_HOLD_TIME: 0.6,
+  TOP_LINGER: 1.1, // seconds of celebrating before the menu comes back
+
+  // The styles a problem can be built in. `moves`/`drift`/`dist` multiply the
+  // generator's usual asks; `feature` is a required move the route must contain.
+  //
+  // A style is a *shape*, not a second difficulty system: every one of them is
+  // generated at its level's floor and proven the same way, so PROJECT/traverse is
+  // still a level-5 wall. What changes is what the sequence asks you to do.
+  STYLES: [
+    { id: 'up', name: 'UP', blurb: 'straight up', rise: 1.0, drift: 1.0, dist: 1.0 },
+    {
+      id: 'traverse',
+      name: 'TRAVERSE',
+      blurb: 'sideways, then up',
+      rise: 0.55,
+      drift: 1.0,
+      dist: 1.0,
+      cross: 0.36, // aim this far off centre, as a fraction of the wall width
+      pull: 0.62, // ...and commit to it, rather than drifting
+    },
+    {
+      id: 'footmatch',
+      name: 'MATCH',
+      blurb: 'both feet, one hold',
+      rise: 0.85,
+      drift: 1.0,
+      dist: 1.0,
+      feature: 'footmatch',
+    },
+    { id: 'reachy', name: 'REACHY', blurb: 'long moves', rise: 1.0, drift: 1.0, dist: 1.22 },
+    {
+      id: 'wander',
+      name: 'WANDER',
+      blurb: 'weaves across the wall',
+      rise: 0.8,
+      drift: 2.2,
+      dist: 1.0,
+    },
+    { id: 'tall', name: 'TALL', blurb: 'a longer one', rise: 1.45, drift: 1.0, dist: 1.0 },
+  ],
 
   // Chance the generator tries to move a limb onto a hold that already exists
   // rather than placing a new one. This is what makes a hard wall *sparse*: with

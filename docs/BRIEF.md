@@ -10,7 +10,7 @@
 
 ## Concept
 
-A 2D web-based climbing game, optimized for iPhone Safari. The player controls a stick figure on a bouldering wall by dragging its hands and feet onto holds. Multitouch means more than one limb can be moved at once. The goal is to reach the top of the wall without falling.
+A 2D web-based climbing game, optimized for iPhone Safari. The player controls a stick figure on a bouldering wall by dragging its hands and feet onto holds. Multitouch means more than one limb can be moved at once. The goal is to top out a short problem — reach its finish hold and match it with both hands — without falling.
 
 The feel we're going for is **tactile and physical** — the figure should behave like a weighted puppet, not a set of free-floating cursors. Getting that feel right is the entire point of this prototype.
 
@@ -31,12 +31,21 @@ The feel we're going for is **tactile and physical** — the figure should behav
 - If a hold is still out of range after the body has shifted as far as it can, the grab simply fails. No Spider-Man stretching.
 - There is *some* elasticity in reach, but it's tightly bounded.
 
+### Topping out
+
+A problem ends at a **finish hold you match with both hands** and hold for a moment.
+Slapping it is not enough — controlling the top is the last move, the way it is in a
+gym. Topping a problem ticks it off the grid, and the ticks persist.
+
 ### Falling
 
-The player falls if either:
+The player falls if:
 
-1. **All four limbs leave the wall** at once, or
-2. **Stamina runs out.**
+1. **All four limbs leave the wall** at once,
+2. **Stamina runs out**, or
+3. **Both hands come off** somewhere the feet cannot hold the body on their own.
+   Hanging from two feet is anatomically impossible, so there is no body position to
+   draw — you have let go of the wall with nothing underneath you.
 
 ### Stamina
 
@@ -63,11 +72,11 @@ The view scrolls to keep the figure roughly centered as they climb. The wall scr
 
 ## Wall Generation
 
-- **Procedurally generated from a seed.** The same seed always produces the same wall.
-- Effectively infinite wall space. (Later: let players enter a seed to replay or share a specific climb — not needed for the prototype, but don't design it out.)
-- **Hard constraint: every generated wall must be climbable.** The generator needs to verify that each successive move is within the figure's reach envelope from a plausible stance. Don't generate holds and hope. This holds at every difficulty level, and `npm run verify` proves it for all five.
-- Difficulty ramps with height: holds get sparser, smaller, and further apart as the player ascends.
-- **Five difficulty levels**, chosen from a menu. A level is a floor under that same ramp, so picking a harder wall is the same as starting further up an easier one. Level 1 is the original wall.
+- **Procedurally generated from a seed.** The same seed always produces the same problem, so a problem you ticked off is the one you solved. (Later: let players enter a seed to replay or share a specific climb — not needed for the prototype, but don't design it out.)
+- **A problem is short** — about four body lengths, readable from the ground before you pull — and ends at a finish hold. An endless wall is a marathon, not a puzzle.
+- **Hard constraint: every generated problem must be climbable, and toppable.** The generator verifies that each successive move is within the figure's reach envelope from a plausible stance, and that the finish can be reached one-handed and then held with both. Don't generate holds and hope. `npm run verify` re-proves all thirty.
+- Difficulty ramps with height, and a level sets a floor under that ramp: holds get sparser, smaller, and further apart. On a problem this short the floor does nearly all of the work.
+- **Five difficulty levels x six problems**, chosen from a grid. Problems within a level differ in *style* rather than difficulty — a traverse, one that wants both feet on a hold, a reachy one — so a level teaches variety and the ladder still means one thing.
 - **Sparse walls are the goal at the hard end, not just bad holds.** It is correct for there to be no legal right-hand move until the right foot has moved, and none for that until the left foot has. Working out which limb can move, and in what order, is the puzzle — so the generator reuses holds rather than placing a fresh one for every move.
 
 ---
@@ -76,12 +85,14 @@ The view scrolls to keep the figure roughly centered as they climb. The wall scr
 
 Build **only** this:
 
-- Five walls, one fixed seed each, picked from a menu.
+- Thirty short problems: five difficulties x six, picked from a grid. Each ends at a
+  finish hold matched with both hands, and is ticked off once topped.
 - 2D stick figure with four draggable limbs.
 - Multitouch dragging.
 - Max-reach limits with body lunge/shift.
 - Stamina bar with the three drain factors and recovery.
-- Falling on peel-off and on stamina depletion; falling returns to the menu.
+- Falling on peel-off, on stamina depletion, and on letting go of both hands where
+  the feet cannot hold you; falling returns to the menu.
 - Scrolling camera.
 
 Explicitly **out of scope for now** (do not build these yet):
@@ -271,6 +282,39 @@ given quality two or three possible silhouettes so the wall doesn't read as band
 
 The kind is hashed from the hold's own position rather than drawn from the generator's
 random stream, so no wall geometry moved: `verify` produces byte-identical routes.
+
+### 2026-08-12 — thirty short problems, each with a top
+
+Requested from play: multiple walls per difficulty, much shorter, "more like
+bouldering, where it's more of a puzzle than a marathon", with an end you touch with
+both hands and problems that ask for different things.
+
+**A wall is now a boulder problem.** Five levels x six problems, ~430u each — about
+four body lengths, most of a phone screen — ending at a finish hold you match with
+**both hands** and control for a moment. The endless 600-move wall could not be a
+puzzle: you never saw the end of one, so there was nothing to solve, only somewhere
+to get tired. The scope list above said five walls, one seed each; it is thirty now.
+
+**The top-out is generated and proven, not hoped for.** The generator places the
+finish only where one hand can reach it from the final stance *and* both hands can
+hold it, and both stances go through the same solver check as every other hold. Two
+limbs on one hold was always legal in the sim — nothing ever checked occupancy — but
+no wall had asked for it, so the move existed and was never used.
+
+**Problems come in styles**, which is what "require different things" turned into: a
+traverse that commits to a lateral target, one that wants both feet on the same hold
+(with the alternatives kept a leg's reach away, so the match is the natural move), a
+reachy one, a weave, a taller one. A style is a shape, not a second difficulty
+system — every problem is generated at its level's floor and proven the same way.
+
+**Topping a problem ticks it off**, and the ticks persist across sessions. Scoring
+and progression were explicitly out of scope; a tick is neither, it is the record of
+which of the thirty you have solved, and without it "multiple problems per level" has
+no shape.
+
+Stamina was re-calibrated to suit: on a thirty-move problem it is a pace to keep
+rather than a fuel gauge to eke out, so rests run 42% of stances on level 1 down to
+5% on level 5.
 
 ### Still open
 

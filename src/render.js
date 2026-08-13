@@ -7,7 +7,7 @@
 
 import { T, levelAt, lerp, clamp, clamp01 } from './tuning.js';
 import { LIMB_IDS, torsoFrame, anchorOf, specFor, ikJoint, centerOfMass } from './body.js';
-import { holdsInRange } from './wall.js';
+import { holdsInRange, styleFor, problemKey } from './wall.js';
 
 // HUD buttons sit in a row under the stamina bar, hence the vertical offset.
 const HUD_BTN = { w: 44, h: 30, top: 32, gap: 8 };
@@ -40,16 +40,18 @@ export function hitsRect(r, pt) {
 // --------------------------------------------------------------------------
 
 const MENU = {
-  pad: 18,
-  gap: 9,
-  header: 104, // title + last-attempt line
+  pad: 14,
+  gap: 10,
+  header: 96, // title + last-attempt line
   footer: 26,
-  rowMin: 50, // never smaller than a comfortable thumb target
-  rowMax: 86,
+  label: 15, // room above each row for its level name
+  tileGap: 6,
+  tileMin: 38, // never smaller than a comfortable thumb target
+  tileMax: 62,
 };
 
 /**
- * Row rectangles for the level list, in screen space.
+ * Tile rectangles for the problem grid: one row per level, one tile per problem.
  *
  * Laid out from the view rather than from a fixed design size, because the same
  * menu has to work in a 400pt portrait phone column and in a letterboxed desktop
@@ -59,27 +61,41 @@ export function menuRects(view) {
   const left = view.ox + view.safe.left + MENU.pad;
   const right = view.ox + view.playW - view.safe.right - MENU.pad;
   const w = right - left;
+  const cols = T.PROBLEMS_PER_LEVEL;
+  const rows = T.LEVELS.length;
 
   const availTop = view.safe.top + MENU.header;
   const availH = view.h - availTop - view.safe.bottom - MENU.footer;
-  const n = T.LEVELS.length;
-  const rowH = clamp((availH - MENU.gap * (n - 1)) / n, MENU.rowMin, MENU.rowMax);
-  const blockH = rowH * n + MENU.gap * (n - 1);
-  const top = availTop + Math.max(0, (availH - blockH) / 2);
+  const byWidth = (w - MENU.tileGap * (cols - 1)) / cols;
+  const byHeight = (availH - (MENU.gap + MENU.label) * rows) / rows;
+  const tile = clamp(Math.min(byWidth, byHeight), MENU.tileMin, MENU.tileMax);
+  const rowH = tile + MENU.label;
+  const blockH = rowH * rows + MENU.gap * (rows - 1);
+  // Sit just under the header rather than centring in the leftover space: the tiles
+  // cap out at a thumb's width, so on a tall phone centring leaves a band of nothing
+  // between the title and the grid and the whole menu reads as bottom-heavy.
+  const top = availTop + Math.min(MENU.gap * 2, Math.max(0, (availH - blockH) / 2));
 
-  return T.LEVELS.map((_, i) => ({
-    x: left,
-    y: top + i * (rowH + MENU.gap),
-    w,
-    h: rowH,
+  return T.LEVELS.map((_, level) => ({
+    level,
+    label: { x: left, y: top + level * (rowH + MENU.gap) },
+    tiles: Array.from({ length: cols }, (_, index) => ({
+      level,
+      index,
+      x: left + index * (tile + MENU.tileGap),
+      y: top + level * (rowH + MENU.gap) + MENU.label,
+      w: tile,
+      h: tile,
+    })),
   }));
 }
 
-/** Index of the level row under `pt`, or null. */
+/** `{ level, index }` of the problem tile under `pt`, or null. */
 export function menuHit(view, pt) {
-  const rects = menuRects(view);
-  for (let i = 0; i < rects.length; i++) {
-    if (hitsRect(rects[i], pt)) return i;
+  for (const row of menuRects(view)) {
+    for (const tile of row.tiles) {
+      if (hitsRect(tile, pt)) return { level: tile.level, index: tile.index };
+    }
   }
   return null;
 }
@@ -107,6 +123,7 @@ function drawMenu(ctx, game) {
 
   // ------------------------------------------------------------------ header
   const top = view.safe.top + MENU.pad;
+  const total = T.LEVELS.length * T.PROBLEMS_PER_LEVEL;
   ctx.textAlign = 'left';
   ctx.font = '600 26px ui-monospace, monospace';
   ctx.fillStyle = T.COL.text;
@@ -114,71 +131,95 @@ function drawMenu(ctx, game) {
 
   ctx.font = '12px ui-monospace, monospace';
   ctx.fillStyle = T.COL.textDim;
-  ctx.fillText('pick a wall', left, top + 44);
+  ctx.fillText(`pick a problem  ·  ${game.sent.size}/${total} topped`, left, top + 44);
 
   // Result of the attempt that sent you back here. This is the only reason the
   // menu doubles as the fall screen -- you land back on the list already knowing
-  // why you came off and how high you got.
+  // how it ended.
   if (game.last) {
     const lvl = levelAt(game.last.level);
-    ctx.font = '12px ui-monospace, monospace';
-    ctx.fillStyle = T.COL.stamLo;
+    const style = styleFor(game.last.problem || 0);
+    ctx.font = '600 12px ui-monospace, monospace';
+    ctx.fillStyle = game.last.sent ? T.COL.stamHi : T.COL.stamLo;
     ctx.fillText(game.last.reason, left, top + 70);
     ctx.fillStyle = T.COL.textDim;
+    ctx.font = '12px ui-monospace, monospace';
     ctx.fillText(
-      `on ${game.last.level + 1} ${lvl.name} at ${game.last.height}`,
+      `${lvl.name} ${(game.last.problem || 0) + 1} ${style.name}` +
+        (game.last.sent ? '' : ` at ${game.last.height}`),
       left,
       top + 86,
     );
   }
 
-  // ------------------------------------------------------------------- rows
-  const rects = menuRects(view);
-  rects.forEach((r, i) => {
-    const lvl = T.LEVELS[i];
-    const picked = game.state === 'building' && game.level === i;
-    const col = levelColor(i);
-
-    ctx.fillStyle = picked ? 'rgba(255,209,102,0.18)' : 'rgba(255,255,255,0.05)';
-    roundRect(ctx, r.x, r.y, r.w, r.h, 10);
-    ctx.fill();
-    ctx.strokeStyle = picked ? T.COL.inRange : 'rgba(255,255,255,0.09)';
-    ctx.lineWidth = 1;
-    roundRect(ctx, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, 10);
-    ctx.stroke();
-
-    // number, in the level's own colour
-    ctx.textAlign = 'center';
-    ctx.font = '600 22px ui-monospace, monospace';
-    ctx.fillStyle = col;
-    ctx.fillText(String(i + 1), r.x + 26, r.y + r.h / 2 + 8);
+  // -------------------------------------------------------------- the grid
+  for (const row of menuRects(view)) {
+    const lvl = T.LEVELS[row.level];
+    const col = levelColor(row.level);
+    const done = row.tiles.filter((t) => game.sent.has(problemKey(t.level, t.index))).length;
 
     ctx.textAlign = 'left';
-    ctx.font = '600 14px ui-monospace, monospace';
-    ctx.fillStyle = T.COL.text;
-    ctx.fillText(lvl.name, r.x + 50, r.y + r.h / 2 - 3);
-    ctx.font = '11px ui-monospace, monospace';
+    ctx.font = '600 11px ui-monospace, monospace';
+    ctx.fillStyle = col;
+    ctx.fillText(`${row.level + 1} ${lvl.name}`, row.label.x, row.label.y + 10);
     ctx.fillStyle = T.COL.textDim;
-    ctx.fillText(picked ? 'building wall...' : lvl.blurb, r.x + 50, r.y + r.h / 2 + 14);
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.textAlign = 'right';
+    const last = row.tiles[row.tiles.length - 1];
+    ctx.fillText(`${done}/${row.tiles.length}`, last.x + last.w, row.label.y + 10);
 
-    // difficulty pips
-    const pipR = 3;
-    const pipGap = 9;
-    const pipX = r.x + r.w - 14 - pipGap * (T.LEVELS.length - 1);
-    for (let p = 0; p < T.LEVELS.length; p++) {
-      ctx.beginPath();
-      ctx.arc(pipX + p * pipGap, r.y + r.h / 2, pipR, 0, Math.PI * 2);
-      ctx.fillStyle = p <= i ? col : 'rgba(255,255,255,0.12)';
+    for (const tile of row.tiles) {
+      const sent = game.sent.has(problemKey(tile.level, tile.index));
+      const picked =
+        game.state === 'building' && game.level === tile.level && game.problem === tile.index;
+      const style = styleFor(tile.index);
+
+      ctx.fillStyle = picked
+        ? 'rgba(255,209,102,0.22)'
+        : sent
+          ? mixColor(col, '#000000', 0.62)
+          : 'rgba(255,255,255,0.05)';
+      roundRect(ctx, tile.x, tile.y, tile.w, tile.h, 8);
       ctx.fill();
+      ctx.strokeStyle = picked ? T.COL.inRange : sent ? col : 'rgba(255,255,255,0.1)';
+      ctx.lineWidth = 1;
+      roundRect(ctx, tile.x + 0.5, tile.y + 0.5, tile.w - 1, tile.h - 1, 8);
+      ctx.stroke();
+
+      // A topped problem shows its tick INSTEAD of its number, so a full row reads
+      // at a glance rather than needing to be counted.
+      ctx.textAlign = 'center';
+      const midX = tile.x + tile.w / 2;
+      if (sent) {
+        ctx.strokeStyle = col;
+        ctx.lineWidth = Math.max(2, tile.w * 0.075);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(midX - tile.w * 0.18, tile.y + tile.h * 0.42);
+        ctx.lineTo(midX - tile.w * 0.04, tile.y + tile.h * 0.56);
+        ctx.lineTo(midX + tile.w * 0.2, tile.y + tile.h * 0.3);
+        ctx.stroke();
+        ctx.lineCap = 'butt';
+      } else {
+        ctx.font = `600 ${Math.round(tile.h * 0.34)}px ui-monospace, monospace`;
+        ctx.fillStyle = picked ? T.COL.inRange : T.COL.text;
+        ctx.fillText(String(tile.index + 1), midX, tile.y + tile.h * 0.5);
+      }
+
+      // the style, spelled out -- these are the whole point of having six
+      ctx.font = `${Math.round(clamp(tile.h * 0.17, 7, 9))}px ui-monospace, monospace`;
+      ctx.fillStyle = sent ? mixColor(col, '#ffffff', 0.3) : T.COL.textDim;
+      ctx.fillText(style.name, midX, tile.y + tile.h - tile.h * 0.14);
     }
-  });
+  }
 
   // ------------------------------------------------------------------ footer
   ctx.textAlign = 'center';
   ctx.font = '10px ui-monospace, monospace';
   ctx.fillStyle = T.COL.textDim;
   ctx.fillText(
-    'drag hands and feet onto holds  ·  tap a limb to let go',
+    'drag hands and feet onto holds  ·  match the top with both',
     cx,
     view.h - view.safe.bottom - 10,
   );
@@ -261,6 +302,22 @@ export function draw(ctx, game) {
   for (const hold of visible) {
     const hx = toScreenX(hold.x);
     const hy = toScreenY(hold.y);
+    // The top has to be findable from below without reading the whole wall, so it
+    // gets a halo and a label rather than just being another good hold.
+    if (hold.finish) {
+      const hands = LIMB_IDS.filter((id) => fig.limbs[id].kind === 'hand' && fig.limbs[id].hold === hold).length;
+      const grow = 1 + 0.35 * hands;
+      ctx.beginPath();
+      ctx.arc(hx, hy, (hold.r + 9) * s * grow, 0, Math.PI * 2);
+      ctx.strokeStyle = hands === 2 ? T.COL.stamHi : T.COL.inRange;
+      ctx.lineWidth = (hands === 2 ? 3 : 1.8) * s;
+      ctx.stroke();
+      ctx.font = `600 ${Math.round(11 * s)}px ui-monospace, monospace`;
+      ctx.fillStyle = hands === 2 ? T.COL.stamHi : T.COL.inRange;
+      ctx.textAlign = 'center';
+      ctx.fillText('TOP', hx, hy - (hold.r + 15) * s);
+      ctx.textAlign = 'left';
+    }
     drawHold(ctx, hold, hx, hy, hold.r * s, s);
 
     if (game.debug && hold.route) {
@@ -531,10 +588,51 @@ function drawHud(ctx, game) {
   hudBtn(menuButtonRect(view), 'menu', false);
   hudBtn(debugButtonRect(view), 'dbg', game.debug);
 
-  // which wall you're on
+  // which problem you're on
   ctx.font = '11px ui-monospace, monospace';
   ctx.fillStyle = T.COL.textDim;
-  ctx.fillText(`${wall.level + 1} ${levelAt(wall.level).name}`, left, top + barH + 18);
+  // Kept short: the HUD buttons sit at the same height on the right, and the style's
+  // blurb is already on the menu tile you picked it from.
+  ctx.fillText(
+    `${wall.level + 1} ${levelAt(wall.level).name}  ${wall.index + 1} ${wall.style.name}`,
+    left,
+    top + barH + 18,
+  );
+
+  // Topping out takes a moment of control, so it needs a progress read -- without
+  // one, holding both hands on the finish looks like nothing happening.
+  if (game.topTimer > 0 && game.state === 'climbing') {
+    const t = clamp01(game.topTimer / T.TOP_HOLD_TIME);
+    const w = 120;
+    const x = view.ox + (view.playW - w) / 2;
+    const y = view.h - view.safe.bottom - 42;
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    roundRect(ctx, x, y, w, 8, 4);
+    ctx.fill();
+    ctx.fillStyle = T.COL.stamHi;
+    roundRect(ctx, x, y, Math.max(8, w * t), 8, 4);
+    ctx.fill();
+    ctx.textAlign = 'center';
+    ctx.font = '600 11px ui-monospace, monospace';
+    ctx.fillStyle = T.COL.stamHi;
+    ctx.fillText('HOLD IT', x + w / 2, y - 6);
+    ctx.textAlign = 'left';
+  }
+
+  if (game.state === 'topped') {
+    ctx.textAlign = 'center';
+    ctx.font = '600 34px ui-monospace, monospace';
+    ctx.fillStyle = T.COL.stamHi;
+    ctx.fillText('TOPPED', view.ox + view.playW / 2, view.h * 0.42);
+    ctx.font = '12px ui-monospace, monospace';
+    ctx.fillStyle = T.COL.text;
+    ctx.fillText(
+      `${levelAt(wall.level).name} ${wall.index + 1} ${wall.style.name}`,
+      view.ox + view.playW / 2,
+      view.h * 0.42 + 22,
+    );
+    ctx.textAlign = 'left';
+  }
 
   if (game.debug) {
     const lines = [
@@ -547,7 +645,8 @@ function drawHud(ctx, game) {
       `planted ${stam.planted}   stamina ${stam.value.toFixed(2)}`,
       `fps ${game.fps.toFixed(0)}  upd ${game.msUpdate.toFixed(2)}ms  ren ${game.msRender.toFixed(2)}ms`,
       `holds ${wall.stats.total} (${wall.stats.route} route)`,
-      `level ${wall.level + 1} ${levelAt(wall.level).name}  seed ${wall.seed}`,
+      `rise ${wall.stats.rise.toFixed(0)}u  span ${wall.stats.span.toFixed(0)}u  moves ${wall.stats.moves}`,
+      `L${wall.level + 1} ${levelAt(wall.level).name} #${wall.index + 1} ${wall.style.id}  seed ${wall.seed}`,
     ];
     ctx.font = '11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(0,0,0,0.45)';

@@ -798,12 +798,19 @@ function escapeWedge(fig, limbs, dt) {
   while (dAng > Math.PI) dAng -= Math.PI * 2; // shortest way round
   while (dAng < -Math.PI) dAng += Math.PI * 2;
 
-  // How fast to migrate scales with how bad the wedge is. A mirrored torso at 60u
-  // of violation is a catastrophe and wants reorganising now; 2u is cosmetic, and
-  // correcting it at catastrophe speed is a 4u jolt that the local solver then
-  // undoes -- which is a sawtooth at ~9Hz, and was the last of the jitter left on
-  // the wall. Same rule, two very different urgencies.
-  const urgency = clamp(fig.violation / T.WEDGE_REF, 0, T.WEDGE_URGENCY_MAX);
+  // How fast to migrate scales with how bad the wedge is, measured FROM THE TRIGGER
+  // rather than from zero. A mirrored torso at 60u of violation is a catastrophe and
+  // wants reorganising now; a hair over the trigger is cosmetic, and correcting that
+  // at any real speed is a jolt the local solver simply undoes -- a sawtooth, which
+  // is what the drag lunge taught: a correction that switches on at full strength at
+  // its own threshold will always ring there. Starting the ramp at the trigger means
+  // the escape fades in, and the last settled limit cycle on the wall (a 1u buzz on a
+  // stance sitting 2.3u out, against a 2.0u trigger) went with it.
+  const urgency = clamp(
+    (fig.violation - T.WEDGE_TRIGGER) / T.WEDGE_REF,
+    0,
+    T.WEDGE_URGENCY_MAX,
+  );
 
   // Bound translation and rotation independently, then take the tighter of the
   // two: a mirrored torso can need a big turn with almost no travel, and lerping

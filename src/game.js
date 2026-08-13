@@ -1,10 +1,15 @@
 /**
  * Game state, camera and the drag interaction.
  *
- * The state machine is menu -> building -> climbing -> falling -> menu. The menu
- * is what loads first and it's where a fall puts you, so a wall only exists once
- * a level has been picked -- `wall` and `fig` are null in the menu, and both the
- * update and the draw path have to tolerate that.
+ * The state machine is menu -> building -> climbing -> (falling | topped) -> menu.
+ * The menu is what loads first and it's where both endings put you, so a wall only
+ * exists once a problem has been picked -- `wall` and `fig` are null in the menu, and
+ * both the update and the draw path have to tolerate that.
+ *
+ * A problem ends by being TOPPED: both hands on the finish hold, held for
+ * TOP_HOLD_TIME. Bouldering's own rule is that you have to control the top rather
+ * than slap it, and the delay does a second job -- a wobble that carries a hand
+ * through the finish hold on the way somewhere else isn't a send.
  *
  * `building` exists because generating a wall runs the body solver a few thousand
  * times (~250ms on a laptop, more on a phone). Doing that synchronously inside
@@ -32,8 +37,8 @@
  *    no body can hold, which the solver then renders as a stretched wreck.
  */
 
-import { T, levelAt } from './tuning.js';
-import { generateWall, holdsNear } from './wall.js';
+import { T } from './tuning.js';
+import { generateProblem, holdsNear, problemKey } from './wall.js';
 import {
   createFigure,
   resetToStance,
@@ -59,18 +64,21 @@ export function createGame(canvas) {
       dpr: 1,
       safe: { top: 0, right: 0, bottom: 0, left: 0 },
     },
-    wall: null, // no wall until a level is picked
+    wall: null, // no wall until a problem is picked
     fig: null,
     stam: createStamina(),
     cam: { y: 0 },
     accum: 0, // fixed-timestep reservoir
-    state: 'menu', // menu | building | climbing | falling
+    state: 'menu', // menu | building | climbing | falling | topped
     level: 0, // index into T.LEVELS
+    problem: 0, // which of that level's problems
     buildFrames: 0,
-    last: null, // previous attempt, shown on the menu: { level, reason, height }
+    last: null, // previous attempt, shown on the menu
     fallReason: '',
     fallTimer: 0,
+    topTimer: 0, // how long both hands have been on the finish hold
     bestHeight: 0,
+    sent: loadProgress(), // Set of "level:problem" keys, persisted
     debug: false,
     fps: 60,
     msUpdate: 0,
@@ -89,15 +97,21 @@ export function createGame(canvas) {
       game.pointers.clear();
     },
 
-    /** Pick a level from the menu. The wall is built a frame later; see above. */
-    startLevel(index) {
-      game.level = Math.max(0, Math.min(T.LEVELS.length - 1, index | 0));
+    /** Pick a problem from the menu. The wall is built a frame later; see above. */
+    startProblem(level, index) {
+      game.level = clampIndex(level, T.LEVELS.length);
+      game.problem = clampIndex(index, T.PROBLEMS_PER_LEVEL);
       game.state = 'building';
       game.buildFrames = 0;
       game.pointers.clear();
     },
 
-    /** Retry the current level. No-op from the menu, where there is no level yet. */
+    /** Kept for the number-key shortcut: the first problem of a level. */
+    startLevel(index) {
+      game.startProblem(index, 0);
+    },
+
+    /** Retry the current problem. No-op from the menu, where there is no wall yet. */
     restart() {
       if (!game.wall) return;
       resetToStance(game.fig, game.wall.start);
@@ -105,6 +119,7 @@ export function createGame(canvas) {
       game.state = 'climbing';
       game.accum = 0;
       game.fallTimer = 0;
+      game.topTimer = 0;
       game.bestHeight = 0;
       game.pointers.clear();
       snapCamera(game);
@@ -118,7 +133,7 @@ export function createGame(canvas) {
     pointerDown(id, screenPt) {
       if (game.state === 'menu') {
         const pick = menuHit(game.view, screenPt);
-        if (pick !== null) game.startLevel(pick);
+        if (pick) game.startProblem(pick.level, pick.index);
         return;
       }
       // Ignore input while building and while falling. Falling matters: a finger
@@ -192,18 +207,48 @@ export function createGame(canvas) {
   return game;
 }
 
-/** Generate the picked level's wall and put the figure on its start stance. */
+/** Generate the picked problem and put the figure on its start stance. */
 function buildLevel(game) {
-  const level = levelAt(game.level);
-  game.wall = generateWall(level.seed, game.level);
+  game.wall = generateProblem(game.level, game.problem);
   game.fig = createFigure(game.wall.start);
   game.stam = createStamina();
   game.state = 'climbing';
   game.accum = 0;
   game.fallTimer = 0;
+  game.topTimer = 0;
   game.bestHeight = 0;
   snapCamera(game);
 }
+
+const clampIndex = (v, n) => Math.max(0, Math.min(n - 1, v | 0));
+
+/**
+ * Which problems have been topped, from localStorage.
+ *
+ * Ticking a problem off is the only state in the game that outlives a page load, and
+ * it is worth exactly nothing if it throws: Safari in private mode denies access to
+ * localStorage entirely, and a game that refuses to start because it can't remember
+ * your ticks would be a poor trade. So every access is wrapped and failure just means
+ * the ticks don't persist.
+ */
+function loadProgress() {
+  try {
+    const raw = localStorage.getItem(PROGRESS_KEY);
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveProgress(game) {
+  try {
+    localStorage.setItem(PROGRESS_KEY, JSON.stringify([...game.sent]));
+  } catch {
+    /* private mode, or a full quota: the ticks are simply not remembered */
+  }
+}
+
+const PROGRESS_KEY = 'climb.sent.v1';
 
 /**
  * Is the figure still on the wall in a way a body could manage?
@@ -294,13 +339,20 @@ export function update(game, dt) {
     updateStamina(game.stam, fig, dt);
     game.bestHeight = Math.max(game.bestHeight, -fig.hip.y);
 
+    // Both hands on the finish hold, controlled rather than slapped.
+    game.topTimer = matchingTop(game) ? game.topTimer + dt : 0;
+
     const planted = LIMB_IDS.filter((id) => fig.limbs[id].hold).length;
-    if (planted === 0) beginFall(game, 'PEELED OFF');
+    if (game.topTimer >= T.TOP_HOLD_TIME) topOut(game);
+    else if (planted === 0) beginFall(game, 'PEELED OFF');
     else if (game.stam.value <= 0) beginFall(game, 'PUMPED OUT');
     else if (!supported(fig)) beginFall(game, 'CAME OFF');
     // Backstop for anything the rule above doesn't see: a stance the solver simply
     // cannot answer, held for long enough that it isn't a wedge being fixed.
     else if (fig.lostFor > T.FALL_VIOLATION_TIME) beginFall(game, 'CAME OFF');
+  } else if (game.state === 'topped') {
+    game.fallTimer += dt;
+    if (game.fallTimer > T.TOP_LINGER) game.showMenu();
   } else if (game.state === 'falling') {
     // Watch yourself come off for a beat -- that's the feedback for *why* you
     // fell -- then straight back to the menu, carrying the result with you.
@@ -308,6 +360,7 @@ export function update(game, dt) {
     if (game.fallTimer > T.FALL_LINGER) {
       game.last = {
         level: game.level,
+        problem: game.problem,
         reason: game.fallReason,
         height: Math.round(game.bestHeight),
       };
@@ -319,6 +372,30 @@ export function update(game, dt) {
   const target = cameraTarget(game);
   const k = 1 - Math.exp(-T.CAM_LERP * dt);
   game.cam.y += (target - game.cam.y) * k;
+}
+
+/** Are both hands on the finish hold right now? */
+function matchingTop(game) {
+  const top = game.wall.finish;
+  if (!top) return false;
+  return game.fig.limbs.LH.hold === top && game.fig.limbs.RH.hold === top;
+}
+
+/** Topped it: tick the problem off, and let the player see it before the menu. */
+function topOut(game) {
+  game.state = 'topped';
+  game.fallTimer = 0;
+  game.sent.add(problemKey(game.level, game.problem));
+  saveProgress(game);
+  game.last = {
+    level: game.level,
+    problem: game.problem,
+    reason: 'TOPPED',
+    height: Math.round(game.bestHeight),
+    sent: true,
+  };
+  game.pointers.clear();
+  for (const id of LIMB_IDS) game.fig.limbs[id].drag = null;
 }
 
 function beginFall(game, reason) {

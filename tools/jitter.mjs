@@ -1,11 +1,11 @@
 /**
  * Oscillation probe. Run with `npm run jitter`.
  *
- * `sim` measures jitter once, on the start stance, which is the easiest stance on
- * the wall and has always been quiet. The bug reported from play is intermittent:
+ * `sim` measures jitter once per problem, on the start stance, which is the easiest
+ * stance on the wall and has always been quiet. The bug reported from play is intermittent:
  * the figure occasionally drops into a bouncing loop that doesn't settle. So this
- * looks for the same thing everywhere it can happen -- after every move of the
- * route, and while a pointer is held still mid-drag -- and reports the worst.
+ * looks for the same thing everywhere it can happen -- after every move of every
+ * problem, and while a pointer is held still mid-drag -- and reports the worst.
  *
  * The metric that matters is NOT how far the hip moves. A body migrating to a new
  * equilibrium moves a long way and is fine; a body bouncing 2u back and forth
@@ -23,7 +23,7 @@
  */
 
 import { T } from '../src/tuning.js';
-import { generateWall, holdsNear } from '../src/wall.js';
+import { generateProblem, holdsNear } from '../src/wall.js';
 import { createFigure, stepFigure, canReach, stanceSolvable, LIMB_IDS } from '../src/body.js';
 import { createStamina, updateStamina } from '../src/stamina.js';
 
@@ -65,7 +65,7 @@ function stanceWith(fig, limb, hold) {
 }
 
 /**
- * Walk a level's route, and after every move hold perfectly still for a second
+ * Walk one problem's route, and after every move hold perfectly still for a second
  * and watch. Also holds the pointer still at the end of each drag, before
  * releasing, because a player pausing mid-reach is just as common as a settled
  * stance and the wedge escape is disabled while dragging.
@@ -77,8 +77,8 @@ function stanceWith(fig, limb, hold) {
  * outright (a leg 12u inside its minimum, in the case that flushed this out), and a
  * body oscillating in a position it can never be put in measures the harness.
  */
-function scan(seed, level, maxMoves) {
-  const wall = generateWall(seed, level);
+function scan(level, index) {
+  const wall = generateProblem(level, index);
   const fig = createFigure(wall.start);
   const stam = createStamina();
   for (let i = 0; i < 60; i++) stepFigure(fig, T.SUB_DT);
@@ -88,7 +88,7 @@ function scan(seed, level, maxMoves) {
 
   let n = 0;
   let synthetic = false;
-  for (const mv of wall.route.slice(0, maxMoves)) {
+  for (const mv of wall.route) {
     const limb = fig.limbs[mv.limb];
     const from = { x: limb.pos.x, y: limb.pos.y };
     limb.hold = null;
@@ -132,7 +132,6 @@ const pct = (rows, key, p) => {
   return v[Math.min(v.length - 1, Math.floor(v.length * p))];
 };
 
-const maxMoves = Number(process.argv[2] || 120);
 // Solver noise over a second is a few tenths of a unit. 3u of path that went
 // nowhere is something the eye reads as movement, and it is an order of magnitude
 // clear of the noise floor either way.
@@ -162,7 +161,7 @@ const bouncy = (r) =>
 const BOUNCE_BUDGET = 0.05;
 
 console.log(
-  `scanning ${maxMoves} moves x ${T.LEVELS.length} levels; ` +
+  `scanning every move of all ${T.LEVELS.length * T.PROBLEMS_PER_LEVEL} problems; ` +
     `wander = idle hip path length that went nowhere, over 1s\n`,
 );
 
@@ -170,7 +169,13 @@ let bad = 0;
 let totalBouncing = 0;
 let totalWindows = 0;
 for (let level = 0; level < T.LEVELS.length; level++) {
-  const scanned = scan(T.LEVELS[level].seed, level, maxMoves);
+  // every problem on the level, pooled: one problem is only ~30 windows
+  const scanned = { settled: [], holding: [] };
+  for (let index = 0; index < T.PROBLEMS_PER_LEVEL; index++) {
+    const one = scan(level, index);
+    scanned.settled.push(...one.settled);
+    scanned.holding.push(...one.holding);
+  }
   for (const [what, all] of [
     ['settled', scanned.settled],
     ['holding', scanned.holding],
