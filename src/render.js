@@ -8,6 +8,7 @@
 import { T, levelAt, lerp, clamp, clamp01 } from './tuning.js';
 import { LIMB_IDS, torsoFrame, anchorOf, specFor, ikJoint, centerOfMass } from './body.js';
 import { holdsInRange, styleFor, problemKey } from './wall.js';
+import { wantsInstallHint } from './install.js';
 
 // HUD buttons sit in a row under the stamina bar, hence the vertical offset.
 const HUD_BTN = { w: 44, h: 30, top: 32, gap: 8 };
@@ -48,6 +49,8 @@ const MENU = {
   tileGap: 6,
   tileMin: 38, // never smaller than a comfortable thumb target
   tileMax: 62,
+  hint: 44, // the install nudge: two lines, only on iOS in a browser tab
+  hintGap: 10,
 };
 
 /**
@@ -65,7 +68,11 @@ export function menuRects(view) {
   const rows = T.LEVELS.length;
 
   const availTop = view.safe.top + MENU.header;
-  const availH = view.h - availTop - view.safe.bottom - MENU.footer;
+  // The install nudge is reserved out of the grid's space rather than drawn over
+  // it, so a short window shrinks the tiles instead of hiding the bottom row
+  // under the banner. On a phone there is slack below the grid and nothing moves.
+  const hintH = showInstallHint(view) ? MENU.hint + MENU.hintGap : 0;
+  const availH = view.h - availTop - view.safe.bottom - MENU.footer - hintH;
   const byWidth = (w - MENU.tileGap * (cols - 1)) / cols;
   const byHeight = (availH - (MENU.gap + MENU.label) * rows) / rows;
   const tile = clamp(Math.min(byWidth, byHeight), MENU.tileMin, MENU.tileMax);
@@ -88,6 +95,40 @@ export function menuRects(view) {
       h: tile,
     })),
   }));
+}
+
+/**
+ * Is the nudge wanted *and* is there room for it?
+ *
+ * Reserving space isn't enough on its own: tiles clamp at `tileMin`, so below
+ * about 490 points of usable height the grid overflows whatever is left for it
+ * (a landscape phone already does this without the banner) and a band drawn down
+ * there would sit on top of tappable tiles. Both the layout and the draw ask
+ * this one question, so they can't disagree about whether the band is there.
+ */
+function showInstallHint(view) {
+  if (!wantsInstallHint()) return false;
+  const rows = T.LEVELS.length;
+  const need =
+    MENU.header +
+    MENU.footer +
+    MENU.hint +
+    MENU.hintGap +
+    rows * (MENU.tileMin + MENU.label) +
+    (rows - 1) * MENU.gap;
+  return view.h - view.safe.top - view.safe.bottom >= need;
+}
+
+/** The install nudge's band, just above the footer line. */
+function hintRect(view) {
+  const left = view.ox + view.safe.left + MENU.pad;
+  const right = view.ox + view.playW - view.safe.right - MENU.pad;
+  return {
+    x: left,
+    y: view.h - view.safe.bottom - MENU.footer - MENU.hint,
+    w: right - left,
+    h: MENU.hint,
+  };
 }
 
 /** `{ level, index }` of the problem tile under `pt`, or null. */
@@ -214,6 +255,9 @@ function drawMenu(ctx, game) {
     }
   }
 
+  // ------------------------------------------------------- the install nudge
+  if (showInstallHint(view)) drawInstallHint(ctx, view);
+
   // ------------------------------------------------------------------ footer
   ctx.textAlign = 'center';
   ctx.font = '10px ui-monospace, monospace';
@@ -224,6 +268,74 @@ function drawMenu(ctx, game) {
     view.h - view.safe.bottom - 10,
   );
   ctx.textAlign = 'left';
+}
+
+/**
+ * "Add this to your home screen", on the menu only.
+ *
+ * It isn't dismissable: installing is the dismissal, and the only place it shows
+ * is the screen you are already choosing something on -- never over a climb.
+ */
+function drawInstallHint(ctx, view) {
+  const r = hintRect(view);
+  const cx = r.x + r.w / 2;
+
+  ctx.fillStyle = 'rgba(255,209,102,0.09)';
+  roundRect(ctx, r.x, r.y, r.w, r.h, 10);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,209,102,0.3)';
+  ctx.lineWidth = 1;
+  roundRect(ctx, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, 10);
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.font = '600 12px ui-monospace, monospace';
+  ctx.fillStyle = T.COL.inRange;
+  ctx.fillText('install for full-screen play', cx, r.y + 18);
+
+  // The second line puts the share glyph inline, so the run is measured and laid
+  // out left-to-right from a centred start rather than drawn as centred text.
+  ctx.font = '11px ui-monospace, monospace';
+  ctx.fillStyle = T.COL.textDim;
+  ctx.textAlign = 'left';
+  const pre = 'tap ';
+  const post = ' then "Add to Home Screen"';
+  const glyph = 13;
+  const preW = ctx.measureText(pre).width;
+  let x = cx - (preW + glyph + ctx.measureText(post).width) / 2;
+  const base = r.y + 34;
+  ctx.fillText(pre, x, base);
+  x += preW;
+  drawShareGlyph(ctx, x + glyph / 2, base - 4, glyph);
+  x += glyph;
+  ctx.fillText(post, x, base);
+  ctx.textAlign = 'left';
+}
+
+/** iOS's share button: a tray open at the top with an arrow rising out of it. */
+function drawShareGlyph(ctx, x, y, s) {
+  ctx.strokeStyle = T.COL.text;
+  ctx.lineWidth = Math.max(1.1, s * 0.09);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  ctx.beginPath();
+  ctx.moveTo(x, y + s * 0.06);
+  ctx.lineTo(x, y - s * 0.5);
+  ctx.moveTo(x - s * 0.17, y - s * 0.33);
+  ctx.lineTo(x, y - s * 0.5);
+  ctx.lineTo(x + s * 0.17, y - s * 0.33);
+  // tray, with a gap at the top the arrow passes through
+  ctx.moveTo(x - s * 0.13, y - s * 0.14);
+  ctx.lineTo(x - s * 0.33, y - s * 0.14);
+  ctx.lineTo(x - s * 0.33, y + s * 0.5);
+  ctx.lineTo(x + s * 0.33, y + s * 0.5);
+  ctx.lineTo(x + s * 0.33, y - s * 0.14);
+  ctx.lineTo(x + s * 0.13, y - s * 0.14);
+  ctx.stroke();
+
+  ctx.lineCap = 'butt';
+  ctx.lineJoin = 'miter';
 }
 
 export function draw(ctx, game) {

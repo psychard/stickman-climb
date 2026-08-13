@@ -9,6 +9,7 @@
 import { T } from './tuning.js';
 import { createGame, update, render } from './game.js';
 import { attachInput } from './input.js';
+import { forceInstallHint } from './install.js';
 
 const stage = document.getElementById('stage');
 const canvas = document.getElementById('view');
@@ -21,6 +22,11 @@ attachInput(canvas, game);
 // e.g. __game.fig.hip, __game.stam.parts, __game.debug = true. Note that `fig`
 // and `wall` are null until a level is picked -- the menu loads first.
 window.__game = game;
+
+// The home-screen nudge only draws on iOS in a browser tab, which means it never
+// appears on the machine it's developed on. __installHint(true) forces it on (and
+// __installHint(null) hands the decision back to the sniff).
+window.__installHint = forceInstallHint;
 
 function readSafeInsets() {
   const cs = getComputedStyle(probe);

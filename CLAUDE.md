@@ -154,6 +154,35 @@ is what Android's circle mask wants. iOS applies its own rounding, so the square
 is deliberately not pre-rounded — baking corners in would leave dark cut corners
 after iOS masks it again.
 
+### The nudge to actually install it
+
+The menu carries a band saying *install for full-screen play*, with the share
+glyph drawn inline and the literal wording of the iOS menu item. It is worth the
+pixels because a home-screen launch drops Safari's toolbars, which on a phone is
+a real slice of wall — and the bottom bar otherwise sits exactly where a thumb
+drags a foot.
+
+`src/install.js` is a **user-agent sniff, deliberately**, not a
+`beforeinstallprompt` handler: iOS Safari does not fire that event, so the
+instruction *is* the mechanism. It shows on iPhone/iPad in a browser tab and
+nowhere else — installed (`navigator.standalone`, or `display-mode: standalone`)
+turns it off, Android has the browser's own prompt, and macOS has no home screen.
+iPadOS reports a Macintosh UA, so it takes `maxTouchPoints > 1` to tell the two
+apart. The answer is memoised: it can't change without a reload.
+
+Three things worth knowing before changing it:
+
+- **It doesn't draw on a machine you can develop on.** `window.__installHint(true)`
+  forces it on, `(null)` hands the decision back to the sniff.
+- **There is no dismiss button.** Installing is the dismissal, and it only ever
+  appears on the menu — never over a climb.
+- **`showInstallHint(view)` gates both the layout and the draw**, and has to keep
+  doing so. The band is reserved out of `menuRects`' space rather than drawn over
+  the grid, but tiles clamp at `tileMin`, so under ~490 points of usable height
+  the grid overflows whatever is reserved (a landscape phone already does this
+  without the band) and it is hidden rather than left sitting on top of tappable
+  tiles.
+
 ## Layout
 
 | File | Role |
@@ -165,6 +194,7 @@ after iOS masks it again.
 | `src/game.js` | state, camera, drag interaction |
 | `src/render.js` | canvas drawing, the HUD, the level menu, and the hold silhouettes |
 | `src/input.js` | Pointer Events plumbing |
+| `src/install.js` | should the menu nudge you to install it to your home screen? |
 | `src/main.js` | canvas sizing, safe-area insets, frame loop |
 | `public/` | manifest and home-screen icons, copied verbatim to `dist/` |
 
