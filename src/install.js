@@ -13,21 +13,46 @@
  */
 
 let cached = null;
+let menuStep = null;
 let forced = null; // dev override, exposed as window.__installHint (see main.js)
 
 /** True on an iOS device that is browsing the site rather than running it installed. */
 export function wantsInstallHint() {
-  if (forced !== null) return forced;
+  if (forced !== null) return forced !== false;
   if (cached === null) cached = detect();
   return cached;
 }
 
 /**
+ * Is Share behind the ⋯ menu rather than on the toolbar?
+ *
+ * Safari 26 moved it: the toolbar carries a ⋯ button and the share sheet is one
+ * level in, so the old instruction sends people looking for a glyph that isn't
+ * there any more. Sniffed from the `Version/` token rather than shown to
+ * everyone, because it is equally wrong in the other direction on Safari 18 --
+ * and on anything without that token (Chrome and Firefox on iOS both omit it,
+ * and both keep a share control of their own in reach) the older, shorter
+ * instruction is the safer guess.
+ */
+export function wantsMenuStep() {
+  if (typeof forced === 'string') return forced === 'menu';
+  if (menuStep === null) menuStep = detectMenuStep();
+  return menuStep;
+}
+
+/**
  * Force the hint on or off for a frame-accurate look at it on a desktop, where
- * it would otherwise never draw. `null` hands the decision back to `detect`.
+ * it would otherwise never draw. `null` hands the decision back to `detect`;
+ * 'menu' and 'share' additionally pin which route the second line describes.
  */
 export function forceInstallHint(value) {
   forced = value;
+}
+
+function detectMenuStep() {
+  if (typeof navigator === 'undefined') return false;
+  const version = /version\/(\d+)/i.exec(navigator.userAgent || '');
+  return version ? Number(version[1]) >= 26 : false;
 }
 
 function detect() {

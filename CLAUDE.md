@@ -240,10 +240,19 @@ turns it off, Android has the browser's own prompt, and macOS has no home screen
 iPadOS reports a Macintosh UA, so it takes `maxTouchPoints > 1` to tell the two
 apart. The answer is memoised: it can't change without a reload.
 
-Three things worth knowing before changing it:
+**The route it describes depends on the Safari version.** Safari 26 moved Share
+behind a ⋯ button on the toolbar, so the band says *tap ⋯, ↑, then "Add to Home
+Screen"* there and keeps the old one-step wording below that (`wantsMenuStep`,
+sniffed from the `Version/` token). Showing both steps to everyone would be wrong
+on Safari 18 in the same way the old wording is wrong on 26; anything with no
+`Version/` token at all — Chrome and Firefox on iOS — gets the shorter one, since
+both keep a share control of their own within reach.
+
+Four things worth knowing before changing it:
 
 - **It doesn't draw on a machine you can develop on.** `window.__installHint(true)`
-  forces it on, `(null)` hands the decision back to the sniff.
+  forces it on and `(null)` hands the decision back to the sniff; `('menu')` and
+  `('share')` force it on *and* pin which of the two routes it spells out.
 - **There is no dismiss button.** Installing is the dismissal, and it only ever
   appears on the menu — never over a climb.
 - **`menuBand(view)` gates both the layout and the draw**, and has to keep doing

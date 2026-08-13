@@ -8,7 +8,7 @@
 import { T, levelAt, lerp, clamp, clamp01 } from './tuning.js';
 import { LIMB_IDS, torsoFrame, anchorOf, specFor, ikJoint, centerOfMass } from './body.js';
 import { holdsInRange, styleFor, problemKey } from './wall.js';
-import { wantsInstallHint } from './install.js';
+import { wantsInstallHint, wantsMenuStep } from './install.js';
 import { updateReady } from './update.js';
 
 // HUD buttons sit in a row under the stamina bar, hence the vertical offset.
@@ -335,23 +335,50 @@ function drawInstallHint(ctx, view) {
   ctx.fillStyle = T.COL.inRange;
   ctx.fillText('install for full-screen play', cx, r.y + 18);
 
-  // The second line puts the share glyph inline, so the run is measured and laid
-  // out left-to-right from a centred start rather than drawn as centred text.
+  // The second line has glyphs inline, so it is a sequence of runs measured and
+  // laid out left-to-right from a centred start rather than drawn as centred
+  // text. Safari 26 put Share behind the ⋯ menu, hence the two routes.
   ctx.font = '11px ui-monospace, monospace';
   ctx.fillStyle = T.COL.textDim;
   ctx.textAlign = 'left';
-  const pre = 'tap ';
-  const post = ' then "Add to Home Screen"';
   const glyph = 13;
-  const preW = ctx.measureText(pre).width;
-  let x = cx - (preW + glyph + ctx.measureText(post).width) / 2;
+  const parts = wantsMenuStep()
+    ? ['tap ', 'menu', ', ', 'share', ', then "Add to Home Screen"']
+    : ['tap ', 'share', ' then "Add to Home Screen"'];
+  const isGlyph = (p) => p === 'menu' || p === 'share';
+  const width = parts.reduce((w, p) => w + (isGlyph(p) ? glyph : ctx.measureText(p).width), 0);
+
+  let x = cx - width / 2;
   const base = r.y + 34;
-  ctx.fillText(pre, x, base);
-  x += preW;
-  drawShareGlyph(ctx, x + glyph / 2, base - 4, glyph);
-  x += glyph;
-  ctx.fillText(post, x, base);
+  for (const part of parts) {
+    if (isGlyph(part)) {
+      if (part === 'menu') drawMenuGlyph(ctx, x + glyph / 2, base - 4, glyph);
+      else drawShareGlyph(ctx, x + glyph / 2, base - 4, glyph);
+      x += glyph;
+    } else {
+      ctx.fillText(part, x, base);
+      x += ctx.measureText(part).width;
+    }
+  }
   ctx.textAlign = 'left';
+}
+
+/** Safari's ⋯ toolbar button: three dots in a ring. */
+function drawMenuGlyph(ctx, x, y, s) {
+  ctx.strokeStyle = T.COL.text;
+  ctx.lineWidth = Math.max(1, s * 0.08);
+  ctx.beginPath();
+  ctx.arc(x, y, s * 0.46, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Small and tight: fatter dots at this size stop reading as an ellipsis and
+  // start reading as a face.
+  ctx.fillStyle = T.COL.text;
+  for (const dx of [-0.18, 0, 0.18]) {
+    ctx.beginPath();
+    ctx.arc(x + s * dx, y, Math.max(0.7, s * 0.05), 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 /** iOS's share button: a tray open at the top with an arrow rising out of it. */
