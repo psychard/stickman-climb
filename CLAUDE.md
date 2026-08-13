@@ -63,6 +63,7 @@ npm run measure  # what the biophysics model actually does, in numbers
 npm run ladder   # are the five levels actually five difficulties?
 npm run fuzz     # haul 3 limbs at once to absurd places; can the body be broken?
 npm run jitter   # does the body ever settle into a bouncing loop?
+npm run icon     # regenerate the home-screen icon and favicons (needs rsvg-convert)
 ```
 
 `verify`, `sim`, `fuzz` and `jitter` answer "is it broken?"; `measure` and `ladder`
@@ -116,6 +117,43 @@ settings. `psychard.com` is a **verified domain** on the GitHub account, which
 is what stops anyone else claiming a subdomain of it; that verification is not
 optional given the wildcard.
 
+## Adding it to a home screen
+
+The game installs as **Stickman Climb**: `public/manifest.webmanifest` plus the
+icon links and `apple-mobile-web-app-title` in `index.html`. Everything under
+`public/` is copied to the root of `dist/` by Vite, so the deployed paths are the
+same absolute `/icon-192.png` the dev server serves — the no-`base` decision above
+is what makes that true.
+
+**On iOS the icon comes from `apple-touch-icon`, not from the manifest**, so
+`public/apple-touch-icon.png` (180px) is the file that matters on the target
+device; the manifest icons are for Android and desktop Chrome. The label under
+the icon comes from `apple-mobile-web-app-title` and iOS truncates it around 12
+characters, so "Stickman Climb" shows clipped — shorten that meta tag (and the
+manifest's `short_name`) if that ever matters more than the full name does.
+
+`npm run icon` regenerates all of it from `tools/make-icon.mjs`. The pose in the
+icon is **not** a drawing: it is a four-point stance settled by the real
+`stepFigure` solver and jointed by the same `ikJoint` the renderer uses, so an
+anatomy change re-renders as a body the game can still make. The script prints the
+settled violation and says so if the stance is strained.
+
+Two things about it that look like oversights and aren't:
+
+- **The PNGs are committed.** Rasterising needs `rsvg-convert`, which is not in
+  CI, and adding a rasteriser to `devDependencies` to redraw a static icon on
+  every deploy is a poor trade. Without it the script still writes the SVGs and
+  leaves the PNGs alone.
+- **Holds are plain discs in the icon**, not the five silhouettes `render.js`
+  draws. At 60 CSS px a crimp and a pocket are the same three pixels, and an SVG
+  emitter for five shapes would be upkeep for nothing visible. The colours still
+  come from `T.HOLD_KINDS`, so the icon can't drift off-palette.
+
+The maskable variant is the same art at 78% inside a full-bleed background, which
+is what Android's circle mask wants. iOS applies its own rounding, so the square
+is deliberately not pre-rounded — baking corners in would leave dark cut corners
+after iOS masks it again.
+
 ## Layout
 
 | File | Role |
@@ -128,6 +166,7 @@ optional given the wildcard.
 | `src/render.js` | canvas drawing, the HUD, the level menu, and the hold silhouettes |
 | `src/input.js` | Pointer Events plumbing |
 | `src/main.js` | canvas sizing, safe-area insets, frame loop |
+| `public/` | manifest and home-screen icons, copied verbatim to `dist/` |
 
 Tuning constants live **only** in `src/tuning.js`. Don't inline magic numbers in
 the other modules; they get adjusted constantly and need to be in one place.
