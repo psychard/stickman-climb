@@ -288,16 +288,13 @@ export function draw(ctx, game) {
   const margin = 60;
   const visible = holdsInRange(wall, worldTop - margin, worldBottom + margin);
 
-  // reach affordance for whichever limbs are being dragged
+  // Which limbs are being dragged; the reach affordance is the rings on the holds
+  // themselves, drawn after the holds. There used to be a translucent max-reach
+  // disc around the socket as well, and it was removed as actively misleading: it
+  // drew `spec.max` from the anchor, but a grab is gated on `canReach`, which also
+  // wants the pose cone and a minimum distance, and the body moves under the drag
+  // anyway -- so the disc promised holds you couldn't take and hid ones you could.
   const dragging = LIMB_IDS.map((id) => fig.limbs[id]).filter((l) => l.drag);
-  for (const limb of dragging) {
-    const a = anchorOf(fig.hip, fig.chest, limb);
-    const spec = specFor(limb.kind);
-    ctx.beginPath();
-    ctx.arc(toScreenX(a.x), toScreenY(a.y), spec.max * s, 0, Math.PI * 2);
-    ctx.fillStyle = T.COL.reach;
-    ctx.fill();
-  }
 
   for (const hold of visible) {
     const hx = toScreenX(hold.x);

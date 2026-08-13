@@ -45,6 +45,7 @@ Standing decisions, so they don't get relitigated by accident:
 | **Tap-to-release applies to hands too**, not only feet. | Settled, but flagged: a mistimed tap on a hand can drop you |
 | **Letting go of both hands is a fall** (`CAME OFF`) unless the feet alone can hold you. Hanging from two feet is anatomically impossible, so there is no body position to draw. | Settled — was an unnoticed hole in "releasing is always safe" |
 | **Difficulty is one scalar.** A level sets a *floor* under the same easy→hard number the height ramp already drives; there is no second difficulty system. | Settled |
+| **The reach affordance is rings on the holds, not a reach envelope.** A translucent `spec.max` disc around the socket was drawn and removed: a grab is gated on `canReach` (pose cone and a minimum distance too) and the body moves under the drag, so the disc drew a boundary that was neither the real limit nor a useful one. | Settled — don't reinstate the disc |
 | **Falling returns to the menu**, carrying the reason and height with it. There is no separate retry screen. | Settled |
 | **A wall is a short problem with a top**, not an endless climb: ~430u, ended by matching a finish hold with both hands. Six per level, in styles (traverse, foot match, reachy...), ticked off when topped. | Settled — replaced the endless wall |
 | **Two limbs may share a hold.** Always legal in the sim; now something the generator asks for, in the foot match and in every top-out. | Settled |

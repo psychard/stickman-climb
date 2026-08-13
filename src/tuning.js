@@ -468,7 +468,6 @@ export const T = {
     joint: '#aab6c8',
     planted: '#7dd3a0',
     dragging: '#ffd166',
-    reach: 'rgba(255,209,102,0.16)',
     // Fallback only -- a hold's colour comes from its kind (HOLD_KINDS).
     holdGood: '#5fb3d4',
     inRange: '#ffd166',
