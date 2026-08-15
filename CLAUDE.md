@@ -665,8 +665,13 @@ Four things about it are load-bearing:
   problem built comes from another seed. It is called from `showMenu()`, from
   `visibilitychange`, and once a second while the menu is up, since somebody can sit
   on that screen for hours.
-- **The menu shows the date**, opposite the title. Without it the ticks appear to
-  have cleared themselves overnight for no reason the player can see.
+- **The menu shows the date**, in a chip under the title. Without it the ticks
+  appear to have cleared themselves overnight for no reason the player can see. It
+  is on its way to being the door to a calendar of past days, so it is already sized
+  as a tap target: `dateChipRect(view)` returns `draw` (the 30pt bar you see) and
+  `tap` (the same rect padded to 44pt), and hit-testing it is one line in
+  `pointerDown`. Nothing is wired to it yet, deliberately — a control that looks
+  live and does nothing is worse than one that doesn't look live.
 
 **Ticks are per day, and the record of them is kept.** `localStorage` under
 `climb.days.v1`, shaped `{ "20260814": ["0:0", "2:5"], … }` — with a day-seeded

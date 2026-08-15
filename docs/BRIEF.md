@@ -327,7 +327,11 @@ in with the level and index, so everyone on the same calendar day climbs the sam
 thirty walls and tomorrow they are gone. The date is read off the *local* calendar,
 so the set turns over at each player's own midnight rather than at one shared instant
 that would land mid-evening for half of them. The menu shows the date, because
-otherwise the ticks appear to clear themselves overnight for no visible reason.
+otherwise the ticks appear to clear themselves overnight for no visible reason — and
+it is drawn as a chip sized for a thumb, since it is about to become the way into a
+calendar of past days. The menu is titled STICKMAN CLIMB, matching the name it
+installs under, rather than the CLIMB it said when there was only one thing it could
+have meant.
 
 **A tick now means "I did this one today".** Ticks are stored per day
 (`climb.days.v1`) rather than as one flat list, so the record of which problems were

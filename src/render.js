@@ -45,7 +45,7 @@ export function hitsRect(r, pt) {
 const MENU = {
   pad: 14,
   gap: 10,
-  header: 96, // title + last-attempt line
+  header: 124, // title + date chip + last-attempt line
   footer: 26,
   label: 15, // room above each row for its level name
   tileGap: 6,
@@ -53,6 +53,16 @@ const MENU = {
   tileMax: 62,
   band: 44, // the notice at the foot of the menu: two lines, at most one at a time
   bandGap: 10,
+  title: 26, // title point size, shrunk to fit a narrow column
+  // The date chip. It is DRAWN at `chip` but HIT at `chipTap`, which is the 44pt
+  // Apple asks for -- a 30pt bar is the right weight in a header and the wrong size
+  // under a thumb, and padding the hit area is cheaper than drawing a button that
+  // dominates the screen. Its width is a constant because `dayLabel` is always
+  // exactly ten characters ("FRI 14 AUG"); widen this if that ever stops being true.
+  chip: 30,
+  chipTap: 44,
+  chipW: 104,
+  chipTop: 34, // below the title's baseline
 };
 
 /**
@@ -145,6 +155,22 @@ export function updateBandRect(view) {
   return menuBand(view) === 'update' ? bandRect(view) : null;
 }
 
+/**
+ * The date chip on the menu: where it is drawn, and where it is tapped.
+ *
+ * Two rects, deliberately. `draw` is the bar you see; `tap` is padded out to 44pt so
+ * the target is thumb-sized without the chip having to be. Exported so that when this
+ * becomes the way into a calendar of past days, the hit test reads the same geometry
+ * the draw does rather than a second copy of it.
+ */
+export function dateChipRect(view) {
+  const x = view.ox + view.safe.left + MENU.pad;
+  const y = view.safe.top + MENU.pad + MENU.chipTop;
+  const draw = { x, y, w: MENU.chipW, h: MENU.chip };
+  const grow = (MENU.chipTap - MENU.chip) / 2;
+  return { draw, tap: { x, y: y - grow, w: MENU.chipW, h: MENU.chipTap } };
+}
+
 /** `{ level, index }` of the problem tile under `pt`, or null. */
 export function menuHit(view, pt) {
   for (const row of menuRects(view)) {
@@ -178,24 +204,50 @@ function drawMenu(ctx, game) {
 
   // ------------------------------------------------------------------ header
   const top = view.safe.top + MENU.pad;
+  const right = view.ox + view.playW - view.safe.right - MENU.pad;
   const total = T.LEVELS.length * T.PROBLEMS_PER_LEVEL;
-  ctx.textAlign = 'left';
-  ctx.font = '600 26px ui-monospace, monospace';
-  ctx.fillStyle = T.COL.text;
-  ctx.fillText('CLIMB', left, top + 24);
 
-  // The date, opposite the title. The thirty problems are generated from it and are
-  // gone tomorrow, so it isn't decoration -- without it the ticks appear to have
-  // cleared themselves overnight for no reason the player can see.
-  ctx.textAlign = 'right';
+  // The full name is nearly three times the width "CLIMB" was, so it is fitted to
+  // the column rather than assumed to fit one: a narrow desktop window would
+  // otherwise run it off the side, and the point size is the only thing that gives.
+  ctx.textAlign = 'left';
+  let size = MENU.title;
+  ctx.font = `600 ${size}px ui-monospace, monospace`;
+  const over = ctx.measureText('STICKMAN CLIMB').width / (right - left);
+  if (over > 1) {
+    size = Math.floor(size / over);
+    ctx.font = `600 ${size}px ui-monospace, monospace`;
+  }
+  ctx.fillStyle = T.COL.text;
+  ctx.fillText('STICKMAN CLIMB', left, top + size - 2);
+
+  // The date, on its own line under the title. The thirty problems are generated
+  // from it and are gone tomorrow, so it isn't decoration -- without it the ticks
+  // appear to have cleared themselves overnight for no reason the player can see.
+  // It reads as a chip because it is on its way to being the door to a calendar of
+  // past days; see dateChipRect for why what you see is smaller than what you hit.
+  const chip = dateChipRect(view).draw;
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  roundRect(ctx, chip.x, chip.y, chip.w, chip.h, 8);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 1;
+  roundRect(ctx, chip.x + 0.5, chip.y + 0.5, chip.w - 1, chip.h - 1, 8);
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
   ctx.font = '600 12px ui-monospace, monospace';
-  ctx.fillStyle = T.COL.textDim;
-  ctx.fillText(dayLabel(game.day), view.ox + view.playW - view.safe.right - MENU.pad, top + 22);
+  ctx.fillStyle = T.COL.text;
+  ctx.fillText(dayLabel(game.day), chip.x + chip.w / 2, chip.y + chip.h / 2 + 4);
 
   ctx.textAlign = 'left';
   ctx.font = '12px ui-monospace, monospace';
   ctx.fillStyle = T.COL.textDim;
-  ctx.fillText(`today's problems  ·  ${game.sent.size}/${total} topped`, left, top + 44);
+  ctx.fillText(
+    `${game.sent.size}/${total} topped`,
+    chip.x + chip.w + 12,
+    chip.y + chip.h / 2 + 4,
+  );
 
   // Result of the attempt that sent you back here. This is the only reason the
   // menu doubles as the fall screen -- you land back on the list already knowing
@@ -205,14 +257,14 @@ function drawMenu(ctx, game) {
     const style = styleFor(game.last.problem || 0);
     ctx.font = '600 12px ui-monospace, monospace';
     ctx.fillStyle = game.last.sent ? T.COL.stamHi : T.COL.stamLo;
-    ctx.fillText(game.last.reason, left, top + 70);
+    ctx.fillText(game.last.reason, left, top + 90);
     ctx.fillStyle = T.COL.textDim;
     ctx.font = '12px ui-monospace, monospace';
     ctx.fillText(
       `${lvl.name} ${(game.last.problem || 0) + 1} ${style.name}` +
         (game.last.sent ? '' : ` at ${game.last.height}`),
       left,
-      top + 86,
+      top + 106,
     );
   }
 
