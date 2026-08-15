@@ -21,8 +21,8 @@ of. See [Problems](#problems) and [Menu and difficulty](#menu-and-difficulty).
 
 Working and verified: draggable limbs with multitouch, reach limits with body
 lunge, anatomical pose limits, geometric load distribution, stamina with rest and
-recovery, falling, scrolling camera, seeded walls that are climbable by
-construction, thirty short boulder problems in six styles across five difficulties
+recovery, falling, a balance limit once both hands are off the wall, scrolling
+camera, seeded walls that are climbable by construction, thirty short boulder problems in six styles across five difficulties
 **regenerated every day from the local date**, top-outs matched with both hands, and
 ticks that reset each midnight and are kept per day. Frame cost ~0.3ms of a
 16.7ms budget.
@@ -45,6 +45,7 @@ Standing decisions, so they don't get relitigated by accident:
 | **Nothing peels off a hold automatically.** Planted limbs limit reach; the player taps a limb to release it. | Settled — replaced auto-peel |
 | **Tap-to-release applies to hands too**, not only feet. | Settled, but flagged: a mistimed tap on a hand can drop you |
 | **Letting go of both hands is a fall** (`CAME OFF`) unless the feet alone can hold you. Hanging from two feet is anatomically impossible, so there is no body position to draw. | Settled — was an unnoticed hole in "releasing is always safe" |
+| **With no hand on the wall your weight has to be over your feet.** A hard cap on how far past the base of support the body can be dragged, and ~0.5s of budget out there before `OFF BALANCE`. Scoped to the no-hands case, which no route stance is ever in. | Settled — replaced "leaning out costs stamina and nothing else" |
 | **Difficulty is one scalar.** A level sets a *floor* under the same easy→hard number the height ramp already drives; there is no second difficulty system. | Settled |
 | **The reach affordance is rings on the holds, not a reach envelope.** A translucent `spec.max` disc around the socket was drawn and removed: a grab is gated on `canReach` (pose cone and a minimum distance too) and the body moves under the drag, so the disc drew a boundary that was neither the real limit nor a useful one. | Settled — don't reinstate the disc |
 | **Falling returns to the menu**, carrying the reason and height with it. There is no separate retry screen. | Settled |
@@ -460,6 +461,61 @@ wall. So with no hand planted, the feet have to hold you on their own
 can't. Standing on a ledge is exactly this stance and solves cleanly, so the ordinary
 case is unaffected. `T.FALL_VIOLATION` is a slower backstop for anything the rule
 doesn't see.
+
+### With no hand on the wall, your weight has to be over your feet
+
+That rule is only the *kinematic* half of the question — can the legs reach at
+all — and it passes cleanly on a stance no climber could hold. Two fingers could
+haul both hands off and hold the body out horizontally past its feet **forever**:
+a genuine equilibrium, settling 75u outside the foot span at 0.00u of violation.
+Nothing in the solver has ever computed a moment, so nothing objected. The only
+consequence was a stamina drain that took 10.2 seconds to bite, which reads as
+getting tired rather than as doing something impossible.
+
+**Base of support was rejected once, and that rejection was right — for the case
+it was about.** A support polygon is a floor concept, and with a hand on the wall
+you are hanging, which is why 43% of real route stances legitimately put the COM
+outside the foot span (p90 17u, max 44u). With *no* hand on you are standing, the
+footholds are your floor, and the polygon is exactly right. So all of it is scoped
+to the no-hands case — where **0 of 1112 route stances across the thirty problems
+ever land**, which is what makes it free: `verify`, `sim`, `jitter` and `measure`
+are bit-identical with it in, because `balanceOf` returns null the moment a hand
+is planted.
+
+Three pieces, and the middle one is the only one that actually holds the body back:
+
+- **A free margin**, the foothold's own radius plus `TOPPLE_MARGIN`. Standing on a
+  jug is standing on a ledge; standing on a crimp is standing on a point, which is
+  what makes matching both feet onto one small hold as precarious as it looks. It
+  rides on the existing quality scalar, so no new hold attribute and no crossing of
+  the "holds are direction-free" line.
+- **`projectBalance`, a hard cap past that margin**, projected after the
+  constraints exactly as `projectReach` is the strict version of the soft clamps.
+  This is the part that matters, and measuring is what found it: the thing hauling
+  the body out there is **not the drag** but the `poseCorrection` on the cross-body
+  hand — drag your right hand past your left side and the torso is pushed sideways,
+  at `POSE_STIFF`, on all ten relaxation passes and all sixteen projection ones. Out
+  there the body sits in a horizontal equilibrium of pose correction pushing out
+  against a stretched leg clamping in, which no soft restoring force reaches:
+  `applyTopple` alone is 2.7u per substep against a drag allowed 110 and loses 40:1,
+  and with it the body sat exactly where it had before with only a timer to show.
+- **A budget**, burning proportionally to the overhang, then `OFF BALANCE`.
+  Measured with the feet 45u apart and the pointers hauled off the side of the
+  wall: full stretch drops you at 0.46s, a moderate lean at 0.68s, and a lunge out
+  and back survives up to ~350ms. Standing balanced on the feet alone is free
+  indefinitely, which is what `applyTopple` is for — nothing else restores you
+  horizontally, so without it letting go of both hands would eventually kill you
+  even standing still.
+
+`TOPPLE_MAX` caps the overhang and therefore caps the burn rate too, so **it and
+`TOPPLE_REF` are not independent** — tightening `MAX` 16 → 12 on its own took the
+full-stretch fall from 0.33s to 0.86s. Retune `REF` whenever `MAX` moves.
+
+The base is drawn under the feet whenever there is no hand on the wall — solid bar
+you can stand anywhere on, ghosted extension you can only be out on for a moment,
+marker for your weight that cannot leave the end of it. That is a mechanic on the
+same grounds as the reach rings, and it appears exactly when the rule starts
+applying.
 
 For a foot the limit is **kinematic, not tension** — your leg is only so long.
 This is only safe because the pose cones exist. Max-reach clamps on feet with no

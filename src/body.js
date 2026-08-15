@@ -63,6 +63,12 @@ export function createFigure(stance) {
     // Seconds the violation has been catastrophic. A stance no body can hold is not
     // a stance; the game reads this and drops you. See T.FALL_VIOLATION.
     lostFor: 0,
+    // Standing on your feet with no hand on the wall: where the base of support is
+    // and how far outside it the centre of mass sits. null whenever the rule does
+    // not apply, which is nearly always. See balanceOf.
+    balance: null,
+    // ...and how much of TOPPLE_BUDGET that overhang has burned through.
+    topple: 0,
   };
   for (const id of LIMB_IDS) {
     const def = LIMB_DEFS[id];
@@ -93,6 +99,8 @@ export function resetToStance(fig, stance) {
   fig.chestV = { x: 0, y: 0 };
   fig.violation = 0;
   fig.lostFor = 0;
+  fig.balance = null;
+  fig.topple = 0;
 
   const pts = {};
   for (const id of LIMB_IDS) pts[id] = fig.limbs[id].hold;
@@ -583,6 +591,104 @@ function applyFootPush(state, limbs, dt) {
   }
 }
 
+/**
+ * Where the base of support is when you are STANDING, and how far outside it the
+ * centre of mass has got.
+ *
+ * Returns null unless the figure has no hand on the wall and at least one foot on
+ * it, because that is the only case where a base of support is the right idea. A
+ * hand can pull and a foot can only push: with a hand on you are hanging, your
+ * weight can be anywhere below it, and 43% of real route stances legitimately put
+ * the COM outside the foot span. With no hand on, the footholds are your floor.
+ *
+ * The margin is the foothold's own radius plus TOPPLE_MARGIN, so standing on a
+ * jug is standing on a ledge and standing on a crimp is standing on a point --
+ * which is what makes matching both feet onto one small hold as precarious as it
+ * looks. That rides on the existing quality scalar and needs no new hold
+ * attribute, so it doesn't cross the "holds are direction-free" line.
+ */
+export function balanceOf(fig) {
+  let lo = Infinity;
+  let hi = -Infinity;
+  let tol = 0;
+  for (const id of LIMB_IDS) {
+    const limb = fig.limbs[id];
+    if (!limb.hold || limb.drag) continue;
+    if (limb.kind === 'hand') return null; // a hand on the wall: you're hanging
+    lo = Math.min(lo, limb.hold.x);
+    hi = Math.max(hi, limb.hold.x);
+    tol = Math.max(tol, limb.hold.r || 0);
+  }
+  if (lo > hi) return null; // nothing planted at all -- that's the PEELED OFF rule
+  tol += T.TOPPLE_MARGIN;
+  const com = centerOfMass(fig);
+  const over = Math.max(0, lo - tol - com.x, com.x - (hi + tol));
+  return { lo, hi, tol, over, dir: com.x < lo ? 1 : -1, com };
+}
+
+/**
+ * Standing back up over your feet.
+ *
+ * Applied ONCE per substep as an external displacement alongside gravity, the
+ * drag and the wedge escape -- for the same reason they are: a soft input
+ * re-applied inside the relaxation loop always beats the hard constraints it
+ * opposes, which is where all three of the fixed oscillators came from.
+ *
+ * It reads `fig.balance` as measured at the END of the previous substep rather
+ * than re-measuring here, which is the discipline escapeWedge had to learn: a
+ * body that has just had a gravity sag and a drag pull added to it has had no
+ * chance to resolve either, so measuring now reads a transient the projection is
+ * about to remove.
+ *
+ * The push is proportional to the overhang and goes to zero exactly at the edge
+ * of the base, so it has a genuine equilibrium there and cannot overshoot into
+ * its own dead zone -- what the drag lunge got wrong. It is then saturated, for
+ * the reason FOOT_PUSH_RATE is: a body hauled 200u past its feet would otherwise
+ * ask to be teleported back in one substep.
+ */
+function applyTopple(fig, dt) {
+  const bal = fig.balance;
+  if (!bal || bal.over <= 0) return;
+  const move = Math.min(bal.over * T.TOPPLE_STIFF, T.TOPPLE_RATE * dt) * bal.dir;
+  fig.hip.x += move;
+  fig.chest.x += move;
+}
+
+/**
+ * The hard limit on how far past your base you can be dragged, projected after
+ * the constraints have run -- exactly as projectReach is the strict version of
+ * the soft reach clamps, and for the same reason.
+ *
+ * applyTopple on its own does not stop this, and measuring is what showed why.
+ * It is a bounded 2.7u-per-substep push, and the thing hauling the body out past
+ * its feet turns out not to be the drag at all (which it would lose to 40:1
+ * anyway) but the POSE CORRECTION on the cross-body hand: drag your right hand
+ * past your left side and the torso is pushed sideways, at POSE_STIFF, on all ten
+ * relaxation passes and all sixteen projection ones, to make that reach
+ * anatomically possible. Out there with no hand on the wall the body settles in a
+ * genuine horizontal equilibrium -- pose correction pushing out, the stretched leg
+ * clamping in -- which is why no amount of soft restoring force reaches it.
+ *
+ * That correction is right in general; it is how you rotate to reach across
+ * yourself. What is missing is that a real climber cannot generate it out of
+ * nothing while standing on their feet. So balance joins reach as something the
+ * body is projected into at the end of the substep, and it wins the tie for the
+ * same reason over-stretch does: it is the violation that reads as broken.
+ *
+ * Iterated rather than solved because the centre of mass is a weighted blend of
+ * hip, chest and the four endpoints, so a translation of the body moves it by
+ * rather less than the translation. Three passes closes it.
+ */
+function projectBalance(fig) {
+  for (let i = 0; i < 3; i++) {
+    const bal = balanceOf(fig);
+    if (!bal || bal.over <= T.TOPPLE_MAX) return;
+    const move = (bal.over - T.TOPPLE_MAX) * bal.dir;
+    fig.hip.x += move;
+    fig.chest.x += move;
+  }
+}
+
 /** One relaxation pass over all constraints. Mutates state.hip / state.chest. */
 function relaxOnce(state, limbs) {
   // 3. planted limbs clamp the body inside their reach envelope.
@@ -676,9 +782,14 @@ export function stepFigure(fig, dt) {
   // external inputs first, then let the constraints resolve them
   applyFootPush(fig, limbs, dt);
   applyDragPull(fig, limbs, dt);
+  applyTopple(fig, dt);
   escapeWedge(fig, limbs, dt);
   for (let i = 0; i < T.ITERATIONS; i++) relaxOnce(fig, limbs);
   projectReach(fig, limbs);
+  // ...and balance last of all, so nothing moves the body after it. Placed ahead of
+  // the velocity feedback and the violation measurement below, so both see where
+  // the body actually ended up rather than where the pose correction wanted it.
+  projectBalance(fig);
 
   // Only a fraction of the solved motion becomes momentum. At equilibrium the
   // sag is cancelled by the tethers, the delta is ~0, and the body goes still.
@@ -697,6 +808,18 @@ export function stepFigure(fig, dt) {
   fig.lostFor = fig.violation > T.FALL_VIOLATION ? fig.lostFor + dt : 0;
 
   placeEndpoints(fig, limbs);
+
+  // Balance is measured LAST, after the endpoints are placed: the arms are a real
+  // part of the mass, so where the pointer has hauled them is part of where your
+  // weight is. This is the settled measurement the next substep's applyTopple
+  // acts on, and it burns the budget that eventually drops you -- proportionally,
+  // so a small lean past the edge lasts seconds and a big one doesn't.
+  fig.balance = balanceOf(fig);
+  if (fig.balance && fig.balance.over > 0) {
+    fig.topple += dt * (fig.balance.over / T.TOPPLE_REF);
+  } else {
+    fig.topple = Math.max(0, fig.topple - dt * T.TOPPLE_REARM);
+  }
 }
 
 /**

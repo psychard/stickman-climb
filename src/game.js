@@ -460,7 +460,13 @@ export function update(game, dt) {
     else if (planted === 0) beginFall(game, 'PEELED OFF');
     else if (game.stam.value <= 0) beginFall(game, 'PUMPED OUT');
     else if (!supported(fig)) beginFall(game, 'CAME OFF');
-    // Backstop for anything the rule above doesn't see: a stance the solver simply
+    // Standing on your feet with no hand on the wall, and your weight has been off
+    // the far side of them for longer than you could hold it. `supported` above is
+    // the kinematic half of the same question -- can the legs reach at all -- and
+    // it passes cleanly here, because leaning out past your feet is a position a
+    // body can get into. It just isn't one it can stay in. See T.TOPPLE_BUDGET.
+    else if (fig.topple > T.TOPPLE_BUDGET) beginFall(game, 'OFF BALANCE');
+    // Backstop for anything the rules above don't see: a stance the solver simply
     // cannot answer, held for long enough that it isn't a wedge being fixed.
     else if (fig.lostFor > T.FALL_VIOLATION_TIME) beginFall(game, 'CAME OFF');
   } else if (game.state === 'topped') {

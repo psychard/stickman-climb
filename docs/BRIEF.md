@@ -46,6 +46,10 @@ The player falls if:
 3. **Both hands come off** somewhere the feet cannot hold the body on their own.
    Hanging from two feet is anatomically impossible, so there is no body position to
    draw — you have let go of the wall with nothing underneath you.
+4. **Both hands are off and your weight goes past your feet**, and stays there. With
+   no hand on the wall you are standing rather than hanging, so the centre of mass
+   has to be over the base of support. You can be out past it briefly — that is a
+   lunge — but not indefinitely.
 
 ### Stamina
 
@@ -352,6 +356,51 @@ months. A dead-ended walk is now simply walked again from a derived seed.
 level floor, hold quality, move distance and feasibility gate — it is another draw
 from an identical distribution, not an easier one, and a problem that defeats you is
 still expected to. What is guaranteed is only that a legal top-out exists.
+
+### 2026-08-15 — base of support came back, for the one case it was right about
+
+Reported from play: take both hands off with two fingers and drag them out sideways,
+and the figure leans horizontally past its feet — both of which can be on the same
+pinch — and just stays there, defying gravity for as long as your fingers don't move.
+
+It really did stay there. Reproduced headless, the pose is a genuine equilibrium:
+75u outside the foot span at 0.00u of constraint violation. Nothing in the solver
+computes a moment — the constraints are distances, cones and torso length — so
+nothing objected. The one consequence was a stamina drain taking 10.2 seconds to
+bite, which reads as getting tired rather than as doing something impossible.
+
+**This does not reverse the biophysics pass above, which replaced base of support
+with a sideways-offset drain.** That reasoning was right about the case it was
+about: with a hand on the wall you are hanging, gravity only destabilises you
+sideways, and 43% of real route stances legitimately put the COM outside the foot
+span (p90 17u, max 44u). It just never covered the case where there is no hand on
+the wall at all — and then you are standing, the footholds are your floor, and the
+floor concept is exactly the right one. So the polygon is back, scoped to that case
+and only that case.
+
+The scoping is what makes it safe rather than merely cheap: **0 of the 1112 route
+stances across all thirty problems have no hand planted**, so `verify`, `sim`,
+`jitter` and `measure` all come back bit-identical, and the strain calibration and
+plant rate could not move if they wanted to.
+
+**What actually holds the body back is not what it looked like.** The obvious fix —
+a restoring push toward balance — is a 2.7u-per-substep force against a drag allowed
+110, and it loses 40:1; with it in, the body sat exactly where it had before and all
+that changed was that a timer was running. Instrumenting the substep showed the thing
+hauling the body out there is the **pose correction on the cross-body hand**: drag
+your right hand past your left side and the torso is pushed sideways to make that
+reach anatomically possible, at full stiffness, on every relaxation and projection
+pass. Out past the feet that settles into a horizontal equilibrium against the
+stretched leg, which no soft force reaches. So balance joins reach as something the
+body is *projected* into after the constraints have run, and wins the tie for the
+same reason over-stretch does.
+
+**A lunge is still a lunge.** Measured with the feet 45u apart and the pointers
+hauled off the side of the wall: full stretch drops you at 0.46s, a moderate lean at
+0.68s, and throwing out and coming back survives up to ~350ms out there. Standing
+balanced on the feet alone is free indefinitely. The base of support is drawn under
+the feet the moment the second hand comes off, because otherwise the rule is
+invisible until it kills you.
 
 ### Still open
 

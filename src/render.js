@@ -585,6 +585,9 @@ export function draw(ctx, game) {
     }
   }
 
+  // ------------------------------------------------------------ the balance
+  drawBalance(ctx, fig, toScreenX, toScreenY, s);
+
   // ---------------------------------------------------------------- figure
   drawFigure(ctx, fig, toScreenX, toScreenY, s, game.debug, h);
 
@@ -592,6 +595,69 @@ export function draw(ctx, game) {
 
   // ------------------------------------------------------------------- hud
   drawHud(ctx, game);
+}
+
+/**
+ * The base of support, drawn under the feet whenever there is no hand on the wall.
+ *
+ * This is a mechanic and not decoration, on the same grounds as the reach rings:
+ * with both hands off, where your weight is relative to your feet decides whether
+ * you stay on, and there is otherwise nothing on screen that says so. The stamina
+ * bar creeping down reads as getting tired, not as being about to topple.
+ *
+ * It appears the moment the second hand comes off and vanishes when either goes
+ * back on, so it costs nothing during ordinary climbing and teaches the rule at
+ * exactly the moment the rule starts applying. Three parts, and the shape of it is
+ * the whole explanation: a SOLID bar you can stand anywhere on, a GHOSTED
+ * extension you can only be out on for a moment, and a marker for your weight that
+ * cannot leave the end of it.
+ */
+function drawBalance(ctx, fig, toScreenX, toScreenY, s) {
+  const bal = fig.balance;
+  if (!bal) return;
+
+  // just under the lower foot, so it reads as the ground you're standing on
+  let footY = -Infinity;
+  for (const id of LIMB_IDS) {
+    const limb = fig.limbs[id];
+    if (limb.kind === 'foot' && limb.hold && !limb.drag) footY = Math.max(footY, limb.hold.y);
+  }
+  const y = toScreenY(footY + 15);
+  const heat = clamp01(fig.topple / T.TOPPLE_BUDGET);
+  const hot = mixColor(T.COL.inRange, T.COL.stamLo, heat);
+
+  ctx.lineCap = 'round';
+
+  // the committed zone: out here you have about TOPPLE_BUDGET and then you're off
+  ctx.strokeStyle = bal.over > 0 ? hot : 'rgba(255,255,255,0.13)';
+  ctx.lineWidth = 2 * s;
+  ctx.setLineDash([3 * s, 4 * s]);
+  ctx.beginPath();
+  ctx.moveTo(toScreenX(bal.lo - bal.tol - T.TOPPLE_MAX), y);
+  ctx.lineTo(toScreenX(bal.lo - bal.tol), y);
+  ctx.moveTo(toScreenX(bal.hi + bal.tol), y);
+  ctx.lineTo(toScreenX(bal.hi + bal.tol + T.TOPPLE_MAX), y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // the base itself: stand anywhere along here for as long as you like
+  ctx.strokeStyle = bal.over > 0 ? 'rgba(255,255,255,0.3)' : T.COL.planted;
+  ctx.lineWidth = 3 * s;
+  ctx.beginPath();
+  ctx.moveTo(toScreenX(bal.lo - bal.tol), y);
+  ctx.lineTo(toScreenX(bal.hi + bal.tol), y);
+  ctx.stroke();
+  ctx.lineCap = 'butt';
+
+  // ...and where your weight actually is
+  const cx = toScreenX(bal.com.x);
+  ctx.fillStyle = bal.over > 0 ? hot : T.COL.planted;
+  ctx.beginPath();
+  ctx.moveTo(cx, y - 7 * s);
+  ctx.lineTo(cx + 4.5 * s, y - 14 * s);
+  ctx.lineTo(cx - 4.5 * s, y - 14 * s);
+  ctx.closePath();
+  ctx.fill();
 }
 
 /**
@@ -883,6 +949,10 @@ function drawHud(ctx, game) {
       `  arms ${(T.W_ARMLOAD * stam.parts.armLoad).toFixed(3)}`,
       `load ${['LH', 'RH', 'LF', 'RF'].map((id) => `${id}:${((stam.load[id] || 0) * 100).toFixed(0)}`).join(' ')}`,
       `planted ${stam.planted}   stamina ${stam.value.toFixed(2)}`,
+      // Only meaningful with no hand on the wall, which is when balance is non-null.
+      fig.balance
+        ? `over ${fig.balance.over.toFixed(1)}u  topple ${fig.topple.toFixed(2)}/${T.TOPPLE_BUDGET}`
+        : 'balance n/a (hand on)',
       `fps ${game.fps.toFixed(0)}  upd ${game.msUpdate.toFixed(2)}ms  ren ${game.msRender.toFixed(2)}ms`,
       `holds ${wall.stats.total} (${wall.stats.route} route)`,
       `rise ${wall.stats.rise.toFixed(0)}u  span ${wall.stats.span.toFixed(0)}u  moves ${wall.stats.moves}`,

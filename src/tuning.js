@@ -183,6 +183,65 @@ export const T = {
   // exists only to keep the frame interpretable.
   TORSO_TILT_MAX: 72,
 
+  // ----------------------------------------------------------- off balance ---
+  // WITH NO HAND ON THE WALL YOU ARE STANDING, NOT HANGING, and the centre of
+  // mass has to sit over your feet. Nothing else in the solver knows this: the
+  // constraints are distances and cones, and no part of the model has ever
+  // computed a moment. So two fingers could haul both hands off and hold the body
+  // out horizontally past its feet indefinitely -- measured as a genuine
+  // equilibrium, settling 75u outside the foot span at 0.00u of violation, with
+  // the only consequence a stamina drain that took 10.2 seconds to bite.
+  //
+  // The base-of-support idea was rejected once already (see docs/BRIEF.md) and
+  // that rejection was right: a support polygon is a floor concept, and with a
+  // hand on the wall you are hanging, so 43% of real route stances legitimately
+  // put the COM outside the foot span (p90 17u, max 44u). But with NO hand on,
+  // the footholds *are* the floor and the polygon is exactly the right idea. That
+  // is why all of this is scoped to the no-hands case -- where, measured over all
+  // thirty problems, 0 of 1112 route stances ever land, so none of it can touch
+  // generated climbing, the plant rate or the strain calibration.
+  //
+  // Past the base the body is pulled back over its feet. Note that this is the
+  // CLIMBER'S OWN EFFORT, not gravity: gravity's moment out there is
+  // destabilising and would rotate you further off, which is the honest physics
+  // and makes every overbalance fatal. Recovering instead means an overreach
+  // simply fails to come off, which is the forgiving reading and the right one
+  // for a toy about how dragging feels.
+  TOPPLE_MARGIN: 10, // free lean past the edge of the foothold, world units
+  // Proportional to the overhang and zero exactly at the edge, so it has a real
+  // equilibrium there and cannot overshoot into its own dead zone -- the lesson
+  // the drag lunge taught (see LUNGE_START). Saturated for the same reason
+  // FOOT_PUSH_RATE is: a huge overhang would otherwise ask for a teleport.
+  TOPPLE_STIFF: 0.16, // fraction of the overhang recovered per substep
+  TOPPLE_RATE: 320, // ...saturating here, world units / second
+  // ...and if the player out-drags that, a budget runs out and you come off. It
+  // burns proportionally to the overhang, so a small lean past the edge is
+  // survivable for seconds and a big one for a fraction of one -- which is what
+  // keeps a transitory lunge possible while a held pose is not. Measured on a
+  // stance with the feet 45u apart and the pointers hauled off the side of the
+  // wall: full stretch drops you at 0.46s, a moderate lean at 0.68s, and a lunge
+  // out and back survives up to ~350ms of it.
+  //
+  // Note TOPPLE_MAX caps the overhang and therefore caps the burn rate too, so
+  // these two knobs are not independent -- retune REF whenever MAX moves, or the
+  // shortest possible fall silently gets longer. Tightening MAX 16 -> 12 on its own
+  // took the full-stretch fall from 0.33s to 0.86s.
+  TOPPLE_REF: 14, // overhang that burns the budget at 1x, world units
+  TOPPLE_BUDGET: 0.42, // seconds of that before you come off
+  TOPPLE_REARM: 1.6, // budget recovered per second back in balance, as a rate
+  // ...and the hard limit, projected after the constraints have run. Past the free
+  // margin the body may be dragged this much further and NO further, however hard
+  // the pointer pulls -- so the lean has an end you can feel rather than a timer
+  // you can't. The soft recovery above cannot do this job on its own: it loses 40:1
+  // to the drag, and in any case what hauls the body out there is the pose
+  // correction on a cross-body hand, which has an order more authority than either.
+  // See projectBalance.
+  //
+  // With the margin above this puts the centre of mass at most ~22u past the outer
+  // foot, which is roughly a third of a torso length -- visibly a lunge, and
+  // visibly not a pose. At 16 it was 40u and still read as the plank it replaced.
+  TOPPLE_MAX: 12,
+
   // Elasticity in reach: past max the limb keeps moving, but with exponential
   // resistance, asymptotically capped at max + REACH_STRETCH. Tight, on purpose.
   REACH_STRETCH: 9,
