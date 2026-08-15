@@ -106,6 +106,14 @@ Pushing to `main` publishes to <https://climb.psychard.com/> via
 The Pages source is set to "GitHub Actions", not deploy-from-branch, so there is
 no `gh-pages` branch and nothing to commit — `dist/` stays gitignored.
 
+`.github/workflows/ci.yml` runs the same `verify` and `build` on a **pull
+request** and never deploys, so the climbability proof gates the merge rather
+than reporting on a deploy already going out. It holds `contents: read` and
+nothing else — no `pages: write`, no `id-token: write` — because a pull request
+from a fork has no business borrowing the credentials that publish the site.
+The two triggers don't overlap: `pages.yml` owns push-to-`main`, `ci.yml` owns
+pull requests, so nothing deploys twice.
+
 **The site is served at the root of its own subdomain, so there is no `base` in
 `vite.config.js`** and dev, `preview` and the deployed build all agree on `/`.
 That is the whole reason for the subdomain. Serving from a bare project URL
@@ -117,6 +125,46 @@ asset. Don't reintroduce a base without that half.
 
 To put a *different* project on its own `psychard.com` subdomain, follow
 [docs/PUBLISHING.md](docs/PUBLISHING.md) — this repo is its worked example.
+
+### Pinned actions, and what keeps them current
+
+Every action in both workflows is pinned to a **commit SHA with its release in a
+trailing comment**. A tag is mutable, so `@v7` is a promise from whoever can move
+it, and `pages.yml` holds `id-token: write` and publishes the site. The comment
+is the only thing that says which release a hash is, so **move the hash and the
+comment together** or the next reader has forty hex characters and no version.
+Re-resolve one with:
+
+```bash
+gh api repos/actions/checkout/commits/v7.0.1 --jq .sha
+```
+
+`.github/dependabot.yml` does that on a schedule — monthly, all the actions
+**grouped into one PR** rather than one each, because the Pages actions are a set
+with compatibility rules between them (`deploy-pages` reads what
+`upload-pages-artifact` writes) and want reading together. Dependabot understands
+the version comment and rewrites it alongside the SHA, so the convention survives
+the tool that maintains it. There is deliberately **no npm entry**: the only
+dependency is Vite, it never reaches a player's phone, and a major bump wants the
+build output looked at rather than merged on a schedule.
+
+This exists because the pins went stale unnoticed until GitHub retired Node 20 on
+the runners and started force-running four of them on 24. Two breaking changes
+crossed on the way back to current are **no-ops only because of facts that could
+change**:
+
+- **`cache: npm` in both workflows is not redundant.** setup-node v5 began
+  caching automatically off `package.json`'s `packageManager` field (v6 narrowed
+  that to npm). There is no such field here, so that explicit line is still the
+  only thing turning the cache on — deleting it as duplicated loses it silently.
+- **`dist/` must stay free of dotfiles.** upload-pages-artifact v4 stopped
+  including hidden files. Vite's output plus the verbatim copy of `public/` has
+  none today; if one ever appears it will go missing from the deploy rather than
+  fail the build, and the fix is `include-hidden-files: true`.
+
+`node-version: 22` is the Node this project *builds* under and is a separate axis
+from the runtime the actions themselves run on. Retiring one doesn't retire the
+other.
 
 ### Offline, and how an update reaches a phone
 
