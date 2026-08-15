@@ -38,6 +38,7 @@
  */
 
 import { T } from './tuning.js';
+import { today, isDay } from './day.js';
 import { generateProblem, holdsNear, problemKey } from './wall.js';
 import {
   createFigure,
@@ -79,7 +80,13 @@ export function createGame(canvas) {
     fallTimer: 0,
     topTimer: 0, // how long both hands have been on the finish hold
     bestHeight: 0,
-    sent: loadProgress(), // Set of "level:problem" keys, persisted
+    // The thirty problems are the day's, and so are the ticks. `days` is the whole
+    // history, day -> Set of "level:problem". `day` can be forced from the console
+    // (see setDay).
+    days: loadHistory(),
+    day: 0,
+    dayForced: 0,
+    dayCheck: 0, // seconds since the clock was last asked, on the menu
     debug: false,
     fps: 60,
     msUpdate: 0,
@@ -93,12 +100,63 @@ export function createGame(canvas) {
       };
     },
 
+    /**
+     * Which of today's problems are ticked off. A getter, not a field, deliberately:
+     * it is the day's entry in `game.days`, and holding a reference to that Set means
+     * anything which replaces it -- clearing the history from the console, a rollover
+     * racing a draw -- leaves the menu reading a Set nobody writes to any more, which
+     * shows up as a top-out that didn't tick. Derived on read, it cannot go stale.
+     */
+    get sent() {
+      return ticksFor(game, game.day);
+    },
+
     showMenu() {
+      // Rolled BEFORE the state flips, which is what lets rollDay tell "the day
+      // turned while the list sat open" from "the day turned during the climb whose
+      // result I am about to show".
+      game.rollDay();
       game.state = 'menu';
       game.pointers.clear();
       // The menu is the only place an update can be announced, so it's the only
       // place worth asking whether there is one. Throttled inside update.js.
       checkForUpdate();
+    },
+
+    /**
+     * Move onto today's set if the clock has passed midnight. Returns whether it did.
+     *
+     * Everything that follows from the date is derived from `game.day` rather than
+     * read from the clock at the point of use, so this one call is the whole
+     * rollover: `sent` starts reading another day's ticks and the next problem built
+     * comes from a different seed. A climb in progress is deliberately left alone --
+     * the wall carries its own day (see `wall.day`), so it finishes as part of the
+     * set it came from and its tick is filed there.
+     */
+    rollDay() {
+      const day = game.dayForced || today();
+      if (day === game.day) return false;
+      game.day = day;
+      // A result banner left from before the rollover names a problem from a set
+      // that no longer exists, so it goes. One you have just this second finished
+      // does not: it is the report on the attempt you made, whichever set that was
+      // on. `menu` here means the day turned with the list already up and nothing
+      // newer to say -- see showMenu, which rolls before it flips the state.
+      if (game.state === 'menu') game.last = null;
+      return true;
+    },
+
+    /**
+     * Pretend it is another day, for looking at a set without waiting for it.
+     * `setDay(0)` hands the decision back to the clock. Ticks are still filed under
+     * whatever day is in force, so this writes real history -- it is a debug lever,
+     * not a preview.
+     */
+    setDay(day) {
+      game.dayForced = isDay(day) ? day : 0;
+      game.rollDay();
+      if (game.state !== 'menu') game.showMenu();
+      return game.day;
     },
 
     /** Pick a problem from the menu. The wall is built a frame later; see above. */
@@ -215,12 +273,13 @@ export function createGame(canvas) {
     },
   };
 
+  game.rollDay();
   return game;
 }
 
 /** Generate the picked problem and put the figure on its start stance. */
 function buildLevel(game) {
-  game.wall = generateProblem(game.level, game.problem);
+  game.wall = generateProblem(game.level, game.problem, game.day);
   game.fig = createFigure(game.wall.start);
   game.stam = createStamina();
   game.state = 'climbing';
@@ -234,32 +293,65 @@ function buildLevel(game) {
 const clampIndex = (v, n) => Math.max(0, Math.min(n - 1, v | 0));
 
 /**
- * Which problems have been topped, from localStorage.
+ * Which problems were topped, by day, from localStorage.
+ *
+ * The ticks reset every midnight but the record of them does not: `{ "20260814":
+ * ["0:0", "2:5"], ... }`, which with the day-seeded generator is enough to rebuild
+ * exactly which walls those were. That is the shape a streak counter, a score
+ * accumulator or a calendar wants, so those can be added later without a migration.
  *
  * Ticking a problem off is the only state in the game that outlives a page load, and
  * it is worth exactly nothing if it throws: Safari in private mode denies access to
  * localStorage entirely, and a game that refuses to start because it can't remember
  * your ticks would be a poor trade. So every access is wrapped and failure just means
- * the ticks don't persist.
+ * the ticks don't persist. Anything malformed in there is dropped rather than trusted
+ * -- it is a public key in a store the player can edit.
  */
-function loadProgress() {
+function loadHistory() {
+  const out = new Map();
   try {
-    const raw = localStorage.getItem(PROGRESS_KEY);
-    return new Set(raw ? JSON.parse(raw) : []);
+    // The old key held one flat list of ticks against the thirty problems that used
+    // to be fixed forever. Those walls cannot be generated any more, so the list
+    // means nothing and is dropped rather than migrated onto days it never had.
+    localStorage.removeItem(LEGACY_KEY);
+
+    const raw = JSON.parse(localStorage.getItem(HISTORY_KEY) || '{}');
+    for (const [key, list] of Object.entries(raw)) {
+      const day = Number(key);
+      if (!isDay(day) || !Array.isArray(list)) continue;
+      out.set(day, new Set(list.filter((k) => typeof k === 'string')));
+    }
   } catch {
-    return new Set();
+    /* private mode, or corrupt: this session simply starts with no history */
   }
+  return out;
 }
 
-function saveProgress(game) {
+/** The tick set for a day, created on demand. */
+function ticksFor(game, day) {
+  let set = game.days.get(day);
+  if (!set) game.days.set(day, (set = new Set()));
+  return set;
+}
+
+function saveHistory(game) {
   try {
-    localStorage.setItem(PROGRESS_KEY, JSON.stringify([...game.sent]));
+    // Newest first, capped: a phone should not accumulate an unbounded record of
+    // every day it was ever opened. Empty days aren't worth a line.
+    const days = [...game.days.keys()].sort((a, b) => b - a).slice(0, T.HISTORY_DAYS);
+    const out = {};
+    for (const day of days) {
+      const set = game.days.get(day);
+      if (set.size) out[day] = [...set];
+    }
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(out));
   } catch {
     /* private mode, or a full quota: the ticks are simply not remembered */
   }
 }
 
-const PROGRESS_KEY = 'climb.sent.v1';
+const HISTORY_KEY = 'climb.days.v1';
+const LEGACY_KEY = 'climb.sent.v1';
 
 /**
  * Is the figure still on the wall in a way a body could manage?
@@ -324,7 +416,17 @@ function snapCamera(game) {
 }
 
 export function update(game, dt) {
-  if (game.state === 'menu') return;
+  if (game.state === 'menu') {
+    // Someone can sit on this screen for hours, and the tiles have to be honest
+    // about whose ticks they are showing. Asking the clock once a second is enough
+    // to turn the set over within a second of midnight and costs nothing.
+    game.dayCheck += dt;
+    if (game.dayCheck >= 1) {
+      game.dayCheck = 0;
+      game.rollDay();
+    }
+    return;
+  }
 
   // Wait for the "building" frame to actually reach the screen before spending a
   // quarter of a second in the generator, or the tap looks like it was dropped.
@@ -370,6 +472,7 @@ export function update(game, dt) {
     game.fallTimer += dt;
     if (game.fallTimer > T.FALL_LINGER) {
       game.last = {
+        day: game.wall.day,
         level: game.level,
         problem: game.problem,
         reason: game.fallReason,
@@ -396,9 +499,13 @@ function matchingTop(game) {
 function topOut(game) {
   game.state = 'topped';
   game.fallTimer = 0;
-  game.sent.add(problemKey(game.level, game.problem));
-  saveProgress(game);
+  // Filed against the wall's own day, not today's. They differ only when midnight
+  // passed mid-problem, and then the wall is the one that's right: this was a
+  // problem from yesterday's set and that is where it belongs in the record.
+  ticksFor(game, game.wall.day).add(problemKey(game.level, game.problem));
+  saveHistory(game);
   game.last = {
+    day: game.wall.day,
     level: game.level,
     problem: game.problem,
     reason: 'TOPPED',

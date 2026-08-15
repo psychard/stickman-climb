@@ -316,6 +316,39 @@ Stamina was re-calibrated to suit: on a thirty-move problem it is a pace to keep
 rather than a fuel gauge to eke out, so rests run 42% of stances on level 1 down to
 5% on level 5.
 
+### 2026-08-14 — a new set every day
+
+Requested: the climbs should be different each day, seeded from the date, turning
+over at each player's own local midnight, with the ticks resetting and a record kept
+of what was topped on which day.
+
+**The thirty problems are now the day's.** `problemSeed` folds a `YYYYMMDD` integer
+in with the level and index, so everyone on the same calendar day climbs the same
+thirty walls and tomorrow they are gone. The date is read off the *local* calendar,
+so the set turns over at each player's own midnight rather than at one shared instant
+that would land mid-evening for half of them. The menu shows the date, because
+otherwise the ticks appear to clear themselves overnight for no visible reason.
+
+**A tick now means "I did this one today".** Ticks are stored per day
+(`climb.days.v1`) rather than as one flat list, so the record of which problems were
+topped on which day survives the reset — which is what a streak, a score or a
+calendar will be built from. The old flat list is dropped rather than migrated: the
+walls it named cannot be generated any more.
+
+**This exposed a real defect and it was fixed rather than papered over.** The
+generator's walk can dead-end — no limb has a legal move left, and no finish hold can
+be placed from the stance it is stuck in — leaving a problem with no top-out, which
+is unwinnable because matching the top is the only way to send. Sweeping 5400
+problems found 3 of them, all on levels 1–2. That was harmless while the thirty walls
+were fixed and checked once; generating a fresh thirty daily on a device nobody can
+run `verify` on would have handed somebody an unwinnable problem every couple of
+months. A dead-ended walk is now simply walked again from a derived seed.
+
+**Nothing about difficulty moved.** The re-roll runs the same generator at the same
+level floor, hold quality, move distance and feasibility gate — it is another draw
+from an identical distribution, not an easier one, and a problem that defeats you is
+still expected to. What is guaranteed is only that a legal top-out exists.
+
 ### Still open
 
 - Holds are still a direction-free quality scalar. No underclings, sidepulls or
@@ -323,7 +356,7 @@ rather than a fuel gauge to eke out, so rests run 42% of stances on level 1 down
 - Fatigue is still one global bar, though strain is now computed per limb, so
   per-limb pump (and shaking out one arm) is a small step from here.
 - The generator only checks that stances are *possible*, not that they're good.
-  It produces walls where ~37% of bodyweight sits on the arms on an average
+  It produces walls where ~30% of bodyweight sits on the arms on an average
   stance and never tries to put the feet under the body, which is why rest
   positions are scarcer than they should be. This is the highest-value piece of
   work left.

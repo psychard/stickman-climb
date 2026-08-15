@@ -38,12 +38,18 @@ import {
 } from '../src/body.js';
 import { createStamina, updateStamina } from '../src/stamina.js';
 import { makeRng } from '../src/rng.js';
+import { dayArg } from '../src/day.js';
 
 const SETTLE_LEAD = 45; // substeps allowed for the body to recover before judging
 const SETTLE_JUDGED = 30; // substeps that actually count as "settled"
 
-const rounds = Number(process.argv[2] || 300);
-const onlySeed = process.argv[3] ? Number(process.argv[3]) : null;
+const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const rounds = Number(args[0] || 300);
+const onlySeed = args[1] ? Number(args[1]) : null;
+// Pinned, and it has to be: a failure prints its seed so the case can be replayed,
+// and a replay against a wall that changed overnight replays something else. `--day=`
+// moves it for both the run and the replay.
+const DAY = dayArg(process.argv, T.REF_DAY);
 
 /** The stance that would result from `limb` taking `hold`; mirrors game.js. */
 function stanceWith(fig, limb, hold) {
@@ -186,7 +192,7 @@ function fuzz(seed, wall, moves = 40) {
 
 // Any problem serves as scenery -- the fuzzer hauls limbs to arbitrary points and
 // mostly misses the holds entirely. Level 3's first problem is a middling wall.
-const wall = generateProblem(2, 0);
+const wall = generateProblem(2, 0, DAY);
 const seeds = onlySeed !== null ? [onlySeed] : Array.from({ length: rounds }, (_, i) => 9000 + i * 13);
 
 const agg = { stretch: 0, torso: 0, invert: 0, pose: 0 };

@@ -234,8 +234,13 @@ export const T = {
   W_BALANCE: 0.45,
   W_ARMLOAD: 0.45, // cost of simply having weight on your arms
   // Calibrated against the measured spread of real problem stances on level 1, which
-  // runs p25 0.21 / median 0.30 / p90 0.49. Roughly the best 40% of positions on the
-  // easiest level offer a rest, falling to 5% on the hardest -- see `npm run ladder`.
+  // on REF_DAY runs p25 0.23 / median 0.30 / p90 0.44. Roughly the best 35% of
+  // positions on the easiest level offer a rest, falling to 5% on the hardest -- see
+  // `npm run ladder`.
+  //
+  // With the walls reseeded daily that fraction is a distribution, not a number: it
+  // runs 26-45% on level 1 across a 24-day sample, which is why REF_DAY is pinned to
+  // the median day rather than to whichever one was convenient. Don't chase a day.
   //
   // That is more generous on level 1 than the old "best third of an endless wall",
   // and deliberately: a problem is 30-odd moves, so stamina is a pace to keep rather
@@ -314,7 +319,21 @@ export const T = {
   ],
 
   // -------------------------------------------------------------- generator ---
-  SEED: 20260808, // seed for level 1; each level below carries its own
+  // The problems are reseeded from the local date every day (see day.js), so there
+  // is no fixed set of thirty walls to measure any more. `measure`, `ladder`, `sim`,
+  // `fuzz` and `jitter` therefore pin this day by default: a tuning harness whose
+  // walls change overnight can't tell you what your constant did. `verify` is the
+  // exception -- it sweeps the days players are actually about to get.
+  //
+  // The day itself is picked by measurement, not taken from a hat. A day's walls
+  // vary: the rest fraction on level 1 runs 26-45% across a 24-day sample, and
+  // calibrating REST_STRAIN against a day at either end would bake that day's luck
+  // into a constant. This is the sample's MEDIAN day (35%), so the pinned harness
+  // sits where a typical set does. Re-pick it the same way if it ever moves.
+  REF_DAY: 20260812,
+  // How many days of ticks to keep in localStorage. A year and a bit, at ~30 keys a
+  // day, is a few tens of KB and enough for any calendar we'd want to draw.
+  HISTORY_DAYS: 400,
   GEN_CANDIDATES: 48, // sampling attempts per move before relaxing the ask
   GEN_SOLVE_ITERS: 60, // relaxation passes in the headless feasibility check
   // Feasible stances converge to ~0 violation and impossible ones sit tens of
@@ -331,21 +350,27 @@ export const T = {
   // wall the prototype had before the menu existed.
   //
   // The floors are spaced on measured results, not by eye. `npm run ladder`
-  // prints this table; the columns that matter are how far the auto-climber gets
-  // and how many moves it makes before pumping out:
+  // prints this table, measured on REF_DAY's thirty problems:
   //
-  //   lvl  floor  holds/100u  hold q  choices  stuck  rests  climbed  moves
-  //    1    0.00      9.0       0.79     12.5   0.13    40%    1983u   171
-  //    2    0.20      7.6       0.66      8.0   0.37    28%    1326u   102
-  //    3    0.45      6.0       0.50      8.0   0.33    19%    1297u    94
-  //    4    0.70      5.7       0.34      6.0   0.93     6%    1060u    68
-  //    5    1.00      4.4       0.15      4.5   1.13     2%     796u    46
+  //   lvl  floor  holds/100u  hold q  move  reuse  choices  stuck  rests  topped
+  //    1    0.00     12.3       0.91  51.2    1%     11.0    0.21    37%    6/6
+  //    2    0.20     10.2       0.77  54.9    6%      8.0    0.57    19%    6/6
+  //    3    0.45      8.7       0.60  57.7   11%      8.2    0.38    13%    6/6
+  //    4    0.70      7.2       0.46  62.6   18%      6.5    0.69     4%    5/6
+  //    5    1.00      6.0       0.29  69.3   24%      4.7    0.97     5%    5/6
   //
   // `choices` is how many legal moves a stance offers and `stuck` how many of the
-  // four limbs have none. Level 5 averages more than one limb with nowhere to go,
+  // four limbs have none. Level 5 averages nearly one limb with nowhere to go,
   // which is the point: you have to work out which limb can move, and in what
   // order. Note the auto-climber never rests deliberately, so a human gets
-  // further -- these are for spacing the rungs, not for predicting scores.
+  // further -- these are for spacing the rungs, not for predicting scores. The
+  // `climbed` column the table used to carry is gone: every problem is about the
+  // same height now, so it is flat by construction.
+  //
+  // These are ONE DAY's walls. The set is reseeded from the date daily, so each
+  // column is a sample and not a constant -- level 1's rest fraction alone runs
+  // 26-45% across a 24-day sample. Compare like for like (same day) when a change
+  // moves one of these, or the day's luck reads as your change.
   //
   // Move distance is NOT the lever it looks like. MOVE_DIST ramps 52 -> 84 across
   // the ladder but the *achieved* move only goes 62 -> 69, because a limb move is
@@ -371,6 +396,11 @@ export const T = {
   PROBLEMS_PER_LEVEL: 6,
   PROBLEM_RISE: 430, // world units of climbing before the generator looks for a top
   PROBLEM_MOVE_CAP: 90, // stop asking if a problem somehow won't finish
+  // Re-rolls allowed when the generator's walk dead-ends and the problem comes out
+  // with no top-out. One walk in ~1800 does; four independent re-rolls put that at
+  // roughly one in 10^13, which is the right order for a defect that would hand
+  // somebody an unwinnable problem on a device nobody can run `verify` on.
+  PROBLEM_RETRIES: 4,
   TOP_TRIES: 26, // candidate finish positions tried per attempt
   // Both hands on the finish hold, held for this long, tops the problem. The delay
   // is the bouldering rule -- you have to *control* the top, not slap it -- and it

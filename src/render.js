@@ -8,6 +8,7 @@
 import { T, levelAt, lerp, clamp, clamp01 } from './tuning.js';
 import { LIMB_IDS, torsoFrame, anchorOf, specFor, ikJoint, centerOfMass } from './body.js';
 import { holdsInRange, styleFor, problemKey } from './wall.js';
+import { dayLabel } from './day.js';
 import { wantsInstallHint, wantsMenuStep } from './install.js';
 import { updateReady } from './update.js';
 
@@ -183,9 +184,18 @@ function drawMenu(ctx, game) {
   ctx.fillStyle = T.COL.text;
   ctx.fillText('CLIMB', left, top + 24);
 
+  // The date, opposite the title. The thirty problems are generated from it and are
+  // gone tomorrow, so it isn't decoration -- without it the ticks appear to have
+  // cleared themselves overnight for no reason the player can see.
+  ctx.textAlign = 'right';
+  ctx.font = '600 12px ui-monospace, monospace';
+  ctx.fillStyle = T.COL.textDim;
+  ctx.fillText(dayLabel(game.day), view.ox + view.playW - view.safe.right - MENU.pad, top + 22);
+
+  ctx.textAlign = 'left';
   ctx.font = '12px ui-monospace, monospace';
   ctx.fillStyle = T.COL.textDim;
-  ctx.fillText(`pick a problem  ·  ${game.sent.size}/${total} topped`, left, top + 44);
+  ctx.fillText(`today's problems  ·  ${game.sent.size}/${total} topped`, left, top + 44);
 
   // Result of the attempt that sent you back here. This is the only reason the
   // menu doubles as the fall screen -- you land back on the list already knowing
@@ -824,7 +834,8 @@ function drawHud(ctx, game) {
       `fps ${game.fps.toFixed(0)}  upd ${game.msUpdate.toFixed(2)}ms  ren ${game.msRender.toFixed(2)}ms`,
       `holds ${wall.stats.total} (${wall.stats.route} route)`,
       `rise ${wall.stats.rise.toFixed(0)}u  span ${wall.stats.span.toFixed(0)}u  moves ${wall.stats.moves}`,
-      `L${wall.level + 1} ${levelAt(wall.level).name} #${wall.index + 1} ${wall.style.id}  seed ${wall.seed}`,
+      `L${wall.level + 1} ${levelAt(wall.level).name} #${wall.index + 1} ${wall.style.id}`,
+      `day ${wall.day}  seed ${wall.seed}${wall.attempt ? `  reroll ${wall.attempt}` : ''}`,
     ];
     ctx.font = '11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(0,0,0,0.45)';

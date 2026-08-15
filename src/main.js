@@ -82,8 +82,13 @@ document.addEventListener('visibilitychange', () => {
   last = performance.now(); // don't integrate the time spent backgrounded
   // Coming back to a home-screen app that has been open for days is the case
   // that most needs an update check: iOS keeps the web view alive, so nothing
-  // else would ever ask.
-  if (!document.hidden) checkForUpdate();
+  // else would ever ask. The same is true of the date -- roll it here so the
+  // first frame after resuming is already showing today's set, rather than
+  // yesterday's for the second it takes the menu's own check to come round.
+  if (!document.hidden) {
+    game.rollDay();
+    checkForUpdate();
+  }
 });
 
 function frame(now) {

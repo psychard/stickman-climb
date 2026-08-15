@@ -16,9 +16,16 @@
  */
 
 import { T } from '../src/tuning.js';
+import { dayArg } from '../src/day.js';
 import { generateProblem } from '../src/wall.js';
 import { createFigure, stepFigure, anchorOf, LIMB_IDS } from '../src/body.js';
 import { createStamina, updateStamina, computeStrain } from '../src/stamina.js';
+
+// The walls are reseeded from the date every day, and a harness whose stances change
+// overnight cannot tell you what your constant did. So this pins one day, and the
+// numbers quoted in tuning.js are that day's. `--day=YYYYMMDD` (or `--day=today`)
+// asks whether a conclusion was a property of the model or of one set of walls.
+const DAY = dayArg(process.argv, T.REF_DAY);
 
 const cx = T.WALL_W / 2;
 const mk = (x, y, q = 1.0) => ({ x, y, q, r: 8, route: true });
@@ -86,7 +93,7 @@ console.log('\n=== strain over real route stances (what REST_STRAIN calibrates t
   // calibrated against, and they are now all of one level rather than a slice of an
   // endless wall. See REST_STRAIN.
   for (let index = 0; index < T.PROBLEMS_PER_LEVEL; index++) {
-    const wall = generateProblem(0, index);
+    const wall = generateProblem(0, index, DAY);
     const fig = createFigure(wall.start);
     const stam = createStamina();
     const st = (k) => {
@@ -123,7 +130,7 @@ console.log('\n=== strain over real route stances (what REST_STRAIN calibrates t
 // -------------------------------------------------------- 3. reach envelope --
 console.log('\n=== reach envelope (feet must stay on in every case) ===\n');
 {
-  const wall = generateProblem(0, 0);
+  const wall = generateProblem(0, 0, DAY);
   const dirs = { up: [0, -1], diagonal: [0.7, -0.7], sideways: [1, 0] };
   console.log('  direction   reach | body moved | feet on');
   for (const [name, dv] of Object.entries(dirs)) {
@@ -168,7 +175,7 @@ console.log('\n=== reach envelope (feet must stay on in every case) ===\n');
 // ---------------------------------------------------------- 4. release gain --
 console.log('\n=== what tapping a limb off buys you ===\n');
 {
-  const wall = generateProblem(0, 0);
+  const wall = generateProblem(0, 0, DAY);
   const reachRight = (release) => {
     const fig = createFigure(wall.start);
     const stam = createStamina();

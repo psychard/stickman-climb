@@ -10,7 +10,7 @@
  * FILL_DENSITY, DIFF_FULL_HEIGHT, or anything that moves strain -- and update the
  * table in tuning.js with what comes out.
  *
- *   node tools/ladder.mjs [seedsPerLevel]
+ *   node tools/ladder.mjs [--day=YYYYMMDD|today]
  *
  * The two columns that matter are `climbed` and `moves`: how far the live-solver
  * auto-climber gets before it pumps out. It never rests deliberately and it
@@ -19,12 +19,18 @@
  */
 
 import { T } from '../src/tuning.js';
+import { dayArg } from '../src/day.js';
 import { generateProblem, holdsNear, moveDistances, routeStances } from '../src/wall.js';
 import { createFigure, stepFigure, canReach, stanceFeasible, LIMB_IDS } from '../src/body.js';
 import { createStamina, updateStamina, computeStrain } from '../src/stamina.js';
 
 const DRAG_STEPS = 22; // same drag/settle cadence as tools/sim-check.mjs
 const SETTLE_STEPS = 18;
+
+// One pinned day, so the table in tuning.js is reproducible -- the walls are reseeded
+// from the date daily, and a ladder that reshuffles overnight can't justify a floor.
+// `--day=today` re-asks the question against a set nobody has tuned against.
+const DAY = dayArg(process.argv, T.REF_DAY);
 
 const avg = (a) => a.reduce((x, y) => x + y, 0) / (a.length || 1);
 const median = (a) => (a.length ? [...a].sort((x, y) => x - y)[a.length >> 1] : 0);
@@ -59,7 +65,7 @@ function stanceChoices(wall, stance) {
 }
 
 function climb(index, level) {
-  const wall = generateProblem(level, index);
+  const wall = generateProblem(level, index, DAY);
   const fig = createFigure(wall.start);
   const stam = createStamina();
   const st = (n) => {

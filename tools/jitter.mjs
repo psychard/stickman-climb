@@ -23,6 +23,7 @@
  */
 
 import { T } from '../src/tuning.js';
+import { dayArg } from '../src/day.js';
 import { generateProblem, holdsNear } from '../src/wall.js';
 import { createFigure, stepFigure, canReach, stanceSolvable, LIMB_IDS } from '../src/body.js';
 import { createStamina, updateStamina } from '../src/stamina.js';
@@ -30,6 +31,11 @@ import { createStamina, updateStamina } from '../src/stamina.js';
 const DRAG_STEPS = 22;
 const SETTLE_STEPS = 18;
 const WINDOW = 120; // substeps of "no input" we watch for a limit cycle -- 1s
+
+// Pinned to one day's walls (`--day=` to move it): the residual bounce rate is quoted
+// against a fixed set, so a regression has to be a regression rather than a different
+// Tuesday. Oscillation is a property of the solver, not of a particular wall.
+const DAY = dayArg(process.argv, T.REF_DAY);
 
 /** Hip path length vs net displacement over `n` idle substeps. */
 function watchWindow(fig, stam, n = WINDOW) {
@@ -78,7 +84,7 @@ function stanceWith(fig, limb, hold) {
  * body oscillating in a position it can never be put in measures the harness.
  */
 function scan(level, index) {
-  const wall = generateProblem(level, index);
+  const wall = generateProblem(level, index, DAY);
   const fig = createFigure(wall.start);
   const stam = createStamina();
   for (let i = 0; i < 60; i++) stepFigure(fig, T.SUB_DT);

@@ -22,13 +22,14 @@ of. See [Problems](#problems) and [Menu and difficulty](#menu-and-difficulty).
 Working and verified: draggable limbs with multitouch, reach limits with body
 lunge, anatomical pose limits, geometric load distribution, stamina with rest and
 recovery, falling, scrolling camera, seeded walls that are climbable by
-construction, thirty short boulder problems in six styles across five difficulties,
-top-outs matched with both hands, and ticks that persist. Frame cost ~0.3ms of a
+construction, thirty short boulder problems in six styles across five difficulties
+**regenerated every day from the local date**, top-outs matched with both hands, and
+ticks that reset each midnight and are kept per day. Frame cost ~0.3ms of a
 16.7ms budget.
 
-`sim` tops out all thirty problems cleanly at an 89–96% per-move plant rate,
+`sim` tops out all thirty problems cleanly at a 92–96% per-move plant rate,
 `fuzz` — which hauls three limbs at once to arbitrary points — leaves a settled
-violation in 2 runs out of 300, and `jitter` finds a visible limit cycle in 1.3% of
+violation in 2 runs out of 300, and `jitter` finds a visible limit cycle in 0.2% of
 the windows it watches — down from 11.3%, with settled stances now clean. All three
 were comprehensively red before the solver passes described in
 [Keeping the body physical](#keeping-the-body-physical) and
@@ -50,6 +51,7 @@ Standing decisions, so they don't get relitigated by accident:
 | **Offline is a cached shell, and an update is offered rather than applied.** A new build waits behind a band on the menu until it's tapped; nothing reloads mid-climb. | Settled |
 | **A wall is a short problem with a top**, not an endless climb: ~430u, ended by matching a finish hold with both hands. Six per level, in styles (traverse, foot match, reachy...), ticked off when topped. | Settled — replaced the endless wall |
 | **Two limbs may share a hold.** Always legal in the sim; now something the generator asks for, in the foot match and in every top-out. | Settled |
+| **The thirty problems are the day's**, seeded from the local date, and the ticks clear with them at each player's own midnight. What was topped on which day is kept. | Settled — replaced the fixed thirty |
 
 The brief in `docs/BRIEF.md` has been revised where playtesting proved it wrong;
 its Revisions section records what changed and why.
@@ -58,7 +60,7 @@ its Revisions section records what changed and why.
 
 ```bash
 npm run dev      # Vite dev server on :5173, bound to 0.0.0.0
-npm run verify   # prove generated walls are climbable (static solve), all 5 levels
+npm run verify   # prove generated walls are climbable (static solve), 7 days x 30
 npm run sim      # headless auto-climber (live solver): plant rate, jitter, invariants
 npm run measure  # what the biophysics model actually does, in numbers
 npm run ladder   # are the five levels actually five difficulties?
@@ -66,6 +68,12 @@ npm run fuzz     # haul 3 limbs at once to absurd places; can the body be broken
 npm run jitter   # does the body ever settle into a bouncing loop?
 npm run icon     # regenerate the home-screen icon and favicons (needs rsvg-convert)
 ```
+
+The walls are reseeded from the date every day, so **which day a tool runs against is
+part of what it measures**. `verify` sweeps forward from today (`npm run verify -- 30`
+for a longer sweep); everything else pins `T.REF_DAY` so its numbers are comparable
+run to run. All of them take `--day=YYYYMMDD` or `--day=today`. See
+[A new set every day](#a-new-set-every-day).
 
 `verify`, `sim`, `fuzz` and `jitter` answer "is it broken?"; `measure` and `ladder`
 answer "what does it do?". `sim` plays cooperatively and `fuzz` plays adversarially,
@@ -171,6 +179,11 @@ Two caveats worth knowing:
 - **iOS deletes all script-writable storage after 7 days without a visit** — the
   cache *and* the ticks in `localStorage` — for sites used in a browser tab.
   Home-screen apps are exempt, which is another reason the install band exists.
+  That now costs the whole per-day history rather than one day's ticks, so anything
+  built on it (a streak, a score) inherits the same caveat.
+- **A new set still arrives offline.** The date comes from the device clock and the
+  walls from seeds, so an installed copy with no network at all rolls over at
+  midnight like any other. Nothing about the daily set needs a fetch.
 - **A resumed home-screen app never re-navigates**, so nothing would ever check
   for a new build. Hence `checkForUpdate()` on `visibilitychange` and on
   returning to the menu, throttled to a minute inside `update.js`.
@@ -272,6 +285,7 @@ install nudge is not.
 | File | Role |
 |---|---|
 | `src/tuning.js` | **every** tuning constant, plus the palette |
+| `src/day.js` | what day it is, locally: the seed and the storage key |
 | `src/body.js` | figure model + constraint solver (the core of the feel) |
 | `src/wall.js` | seeded generation, climbability proof, spatial index |
 | `src/stamina.js` | load distribution + the drain factors, as one `strain` scalar |
@@ -593,9 +607,11 @@ Three things about the model that are counterintuitive and were each a bug once:
 ## Problems
 
 **A wall is a boulder problem, not a mountain.** Thirty of them: five levels x six,
-generated by `generateProblem(level, index)` from a seed derived from the level's.
-Each rises ~430u (about four body lengths, most of a phone screen) and ends at a
-**finish hold you match with both hands** and hold for `TOP_HOLD_TIME`.
+generated by `generateProblem(level, index, day)` from a seed made of the level's,
+the index and the date. Each rises ~430u (about four body lengths, most of a phone
+screen) and ends at a **finish hold you match with both hands** and hold for
+`TOP_HOLD_TIME`. They are a different thirty tomorrow — see
+[A new set every day](#a-new-set-every-day).
 
 The endless 600-move wall it replaced could not be a puzzle. You never saw the end
 of one, so there was nothing to solve — only somewhere to get tired. Now the whole
@@ -621,6 +637,73 @@ reach away from it (`addFiller`'s guard), because a required move is only requir
 if there is nothing else to stand on. Route holds in that area are left alone — they
 are load-bearing for the sequence — so the honest claim is that the match is the
 natural move there, not that the wall forbids every alternative.
+
+## A new set every day
+
+The thirty problems are seeded from the date: `problemSeed(level, index, day)` folds
+the level's seed, the index and a `YYYYMMDD` integer through `hashSeed`. Everyone on
+the same calendar day climbs the same thirty walls, and tomorrow they are gone.
+
+**The day is local, so the set turns over at each player's own midnight** rather than
+at one shared instant that would land mid-evening for some of them. `src/day.js` is
+the whole of it: a day is the integer `20260814`, read off the local calendar, and it
+is a seed and a storage key as much as it is a date — which is why it's an integer
+and not a `Date`.
+
+Four things about it are load-bearing:
+
+- **`hashSeed` mixes; adding would collide.** The level seeds in `T.LEVELS` are
+  themselves date-like numbers (`20260808`, `41773`, …), so `levelSeed + day` would
+  hand different levels the same wall on different days. Both inputs get avalanched,
+  which also makes consecutive days unrelated rather than adjacent.
+- **`day` is passed in, never read from the clock inside the generator.** That is
+  what lets the headless tools pin one and stay reproducible, and what lets a climb
+  that is in progress at midnight finish on the wall it started on: `wall.day` is
+  carried on the wall and is what a top-out is filed against.
+- **Everything downstream of the date derives from `game.day`**, so `game.rollDay()`
+  is the entire rollover — the tiles redraw against another day's ticks and the next
+  problem built comes from another seed. It is called from `showMenu()`, from
+  `visibilitychange`, and once a second while the menu is up, since somebody can sit
+  on that screen for hours.
+- **The menu shows the date**, opposite the title. Without it the ticks appear to
+  have cleared themselves overnight for no reason the player can see.
+
+**Ticks are per day, and the record of them is kept.** `localStorage` under
+`climb.days.v1`, shaped `{ "20260814": ["0:0", "2:5"], … }` — with a day-seeded
+generator that is enough to say exactly which walls those were, which is what a
+streak, a score or a calendar will want later without a migration. `game.sent` is
+just today's entry in `game.days`. It is capped at `T.HISTORY_DAYS` (400) so a phone
+doesn't accumulate an unbounded record, and anything malformed in there is dropped
+rather than trusted — it is a key the player can edit. The old flat `climb.sent.v1`
+is deleted on load rather than migrated: those thirty walls cannot be generated any
+more, so the ticks name nothing.
+
+**A dead-ended walk is re-rolled, and this is why that had to be fixed now.** The
+generator can paint itself into a corner — no limb has a legal move, the route stops
+short, and no finish hold can be placed from the stance it is stuck in — leaving a
+problem with no top, which is unwinnable because topping out is the only way to send
+one. Sweeping 5400 problems found 3 (0.06%). That was invisible while the thirty
+walls were fixed and checked once by `verify`; generating a fresh thirty every day on
+a device nobody can run `verify` on turns it into roughly one unwinnable problem every
+two months. `generateProblem` now walks again from a derived seed, up to
+`T.PROBLEM_RETRIES` (4) times, which costs ~30ms on the one problem in 1800 that needs
+it and leaves the failure rate around 10⁻¹³. A 400-day sweep (12,000 problems) is
+clean.
+
+**The tools split two ways, and the split matters.** `verify` sweeps *real* days —
+`npm run verify` walks today plus the next six, 210 problems, because it is the gate
+in front of a deploy and what it should defend is the walls players are about to be
+handed. Everything else (`measure`, `ladder`, `sim`, `fuzz`, `jitter`) pins
+`T.REF_DAY`, because they are the tuning harness and a plant rate you cannot compare
+against yesterday's tells you nothing about the constant you just changed — and
+because `fuzz` prints a seed to replay, which a wall that changed overnight would
+replay against something else. All of them take `--day=YYYYMMDD` or `--day=today`.
+
+**`T.REF_DAY` is picked by measurement, not from a hat.** A day's walls vary: level
+1's rest fraction runs 26–45% across a 24-day sample, so calibrating `REST_STRAIN`
+against a day at either end would bake that day's luck into a constant. It is the
+sample's median day. Re-pick it the same way if it ever moves, and when a measured
+number shifts, check the same day before believing the change was yours.
 
 ## Wall generation
 
@@ -674,9 +757,10 @@ stances are excluded from the anatomical invariants (`watch.synthetic`) — the
 figure never actually achieved them, so asserting on them measures the harness.
 
 **Known gap — the obvious next piece of work.** The generator only checks stances
-are *possible*, never that they're good. It averages ~35% of bodyweight on the
-arms across a problem, and it never tries to put the feet under the body, which is
-why rests are scarcer than they should be. Teaching `stanceFeasible` to *prefer*
+are *possible*, never that they're good. It averages ~30% of bodyweight on the
+arms across a problem (26–41% depending on the day's walls), and it never tries to
+put the feet under the body, which is why rests are scarcer than they should be.
+Teaching `stanceFeasible` to *prefer*
 low-arm-load stances (rather than merely accept any feasible one) is the
 highest-value change available.
 
@@ -700,10 +784,11 @@ style and showing a tick once topped. Layout is derived from the view, not a des
 size, so the same code works in a phone column and a letterboxed desktop window —
 and drawing and hit testing read the same rects, so they cannot disagree.
 
-**Ticks persist in `localStorage` under `climb.sent.v1`**, and every access is
-wrapped in try/catch: Safari in private mode denies localStorage outright, and a
-game that refuses to start because it can't remember your ticks would be a bad
-trade. Failure just means the ticks don't survive a reload.
+**Ticks persist in `localStorage` under `climb.days.v1`, keyed by day** — see
+[A new set every day](#a-new-set-every-day). Every access is wrapped in try/catch:
+Safari in private mode denies localStorage outright, and a game that refuses to
+start because it can't remember your ticks would be a bad trade. Failure just means
+the ticks don't survive a reload.
 
 **A level is one number.** `T.LEVELS[i].floor` is a floor under the same easy→hard
 scalar the height ramp already drives (`difficultyAt(height, floor)`), so it moves
@@ -715,19 +800,20 @@ within a problem and steeper between them than it was on the endless wall.
 `npm run ladder` is the tool that justifies the spacing, and the table in
 `tuning.js` is its output — regenerate it if you touch `LEVELS`, `MOVE_DIST`,
 `QUALITY_*`, `REUSE*`, `FILL_DENSITY`, `DIFF_FULL_HEIGHT`, or anything that moves
-strain. It now walks all six problems of each level, and every problem is about the
-same height, so the column that used to matter (`climbed`) is flat by construction —
-`rests` and `choices` are what separate the levels.
+strain. It walks all six problems of each level on `T.REF_DAY`, and every problem is
+about the same height, so the column that used to matter (`climbed`) is flat by
+construction — `rests` and `choices` are what separate the levels. It is one day's
+walls, so treat every column as a sample: compare against the same day.
 
 The column to watch is **`choices`**: how many legal moves a stance offers, and
 `stuck`, how many of the four limbs have none at all. That is the difference
 between a staircase and a problem — on level 5 an average stance offers 5 moves and
-half a limb has nowhere to go, so there may be no right-hand move until the right
-foot has moved. Ordering is the puzzle. Level 1 offers 10 moves a stance, where any
-order works. Rests fall 42% → 5% across the ladder.
+nearly a whole limb has nowhere to go, so there may be no right-hand move until the
+right foot has moved. Ordering is the puzzle. Level 1 offers 11 moves a stance, where
+any order works. Rests fall 37% → 5% across the ladder.
 
 **Move distance is not the difficulty lever it looks like.** `MOVE_DIST` ramps
-52 → 84 across the ladder but the *achieved* move only goes 61 → 69, because a
+52 → 84 across the ladder but the *achieved* move only goes 51 → 69, because a
 limb move is capped by anatomy (`ARM.max` 68, `LEG.max` 80) and the feasibility
 check refuses anything longer. Asking for longer moves just costs plant rate.
 
@@ -735,7 +821,7 @@ check refuses anything longer. Asking for longer moves just costs plant rate.
 one new hold per limb move, density was pinned near 9.5 holds per 100u whatever
 else you tuned — a limb can only move so far, so the holds it needs arrive at a
 fixed rate. `T.REUSE` lets a move land on a hold that already exists, which breaks
-that link: density now runs 12.5 → 6.2 per 100u across the ladder. (Both numbers are
+that link: density now runs 12.3 → 6.0 per 100u across the ladder. (Both numbers are
 higher on a problem than they were on an endless wall, because a problem is short
 enough that the start stance's four jugs are a real fraction of it.)
 
@@ -786,12 +872,23 @@ the number keys jump to a level's first problem from anywhere.
 two frames to build — and `requestAnimationFrame` throttles hard when the browser
 pane isn't focused, so give it seconds, not milliseconds.
 
-Progress lives in `localStorage['climb.sent.v1']`. `__game.sent` is the live Set;
-clear both to start again:
+Progress lives in `localStorage['climb.days.v1']`, keyed by day. `__game.days` is the
+live `Map` of day → tick Set; clear it and the key to start again:
 
 ```js
-localStorage.removeItem('climb.sent.v1'); __game.sent.clear();
+localStorage.removeItem('climb.days.v1'); __game.days.clear();
 ```
+
+`__game.sent` is today's entry in that map and is a **getter**, so it can't be left
+pointing at a Set nobody writes to — which is exactly what clearing the history under
+a cached reference used to do, and it presented as a top-out that didn't tick.
+
+`__game.day` is the day in force. **`__game.setDay(20260901)` climbs another day's
+set** without waiting for it, and `setDay(0)` hands the decision back to the clock —
+which is how you look at a wall a player is reporting a problem with. It is a debug
+lever and not a preview: a top-out is filed under whatever day is in force, so it
+writes real history. The debug overlay carries the day and seed, plus a `reroll`
+count on the rare problem whose first walk dead-ended.
 
 Frame cost is ~0.3ms of a 16.7ms budget, so if the browser reports a low fps it's
 throttling, not the game — check `msUpdate` / `msRender` before optimising.

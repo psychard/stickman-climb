@@ -14,7 +14,8 @@
  */
 
 import { T, difficultyAt, levelAt, lerp, clamp, clamp01 } from './tuning.js';
-import { makeRng } from './rng.js';
+import { makeRng, hashSeed } from './rng.js';
+import { today } from './day.js';
 import { stanceFeasible } from './body.js';
 import { LIMB_IDS } from './body.js';
 
@@ -88,16 +89,26 @@ function startStance() {
 export const styleFor = (index) => T.STYLES[((index % T.STYLES.length) + T.STYLES.length) % T.STYLES.length];
 
 /**
- * A problem's seed. Derived from its level's seed so the whole set is fixed by the
- * five numbers in T.LEVELS, and stable: the same problem is the same wall forever,
- * which is what makes ticking one off mean anything.
+ * A problem's seed: which problem it is, folded together with what day it is.
+ *
+ * The thirty problems used to be fixed forever, which is what made ticking one off
+ * mean something. They are now fixed *for a day* -- the set turns over at the
+ * player's own local midnight (see day.js) and the ticks turn over with it, so what a
+ * tick means is "I did this one today" rather than "I did this one, once". Nothing
+ * else about generation changed: a day is just another number going into the seed,
+ * and every wall is proven climbable by construction whatever comes out.
+ *
+ * `day` is explicit everywhere below rather than read from the clock inside the
+ * generator, so the headless tools can pin a day and stay reproducible.
  */
-export const problemSeed = (level, index) => levelAt(level).seed + index * 7919 + 13;
+export const problemSeed = (level, index, day = today()) =>
+  hashSeed(levelAt(level).seed + index * 7919 + 13, day);
 
 /**
  * How a problem is identified in saved progress. Lives here, next to the seed, so the
  * menu and the game agree on it by construction rather than by both formatting the
- * same string.
+ * same string. The day is NOT part of it: progress is stored per day, so the day is
+ * the key this one sits under rather than part of the key itself.
  */
 export const problemKey = (level, index) => `${level}:${index}`;
 
@@ -107,15 +118,36 @@ export const problemKey = (level, index) => `${level}:${index}`;
  *
  * `level` is an index into T.LEVELS and enters only through `difficultyAt`, as a
  * floor under the same scalar the height ramp drives. `index` picks the style (see
- * T.STYLES) and the seed. Nothing about the climbability guarantee changes with
- * either: a hold is committed only if the resulting stance solves, and that now
- * includes the two stances that make up the top-out -- one hand on the finish, then
- * both.
+ * T.STYLES) and, with `day`, the seed. Nothing about the climbability guarantee
+ * changes with any of them: a hold is committed only if the resulting stance solves,
+ * and that includes the two stances that make up the top-out -- one hand on the
+ * finish, then both.
+ *
+ * **A dead-end is re-rolled rather than shipped.** The generator's walk can paint
+ * itself into a corner: no limb has a legal move left, the route stops short of the
+ * height it was aiming for, and no finish hold can be placed from the stance it is
+ * stuck in. The result is a problem with no top -- unwinnable, since topping out is
+ * the only way to send one. Measured over 5400 problems that happens to 0.06% of
+ * them, which was invisible while the thirty walls were fixed and checked once, and
+ * is about one unwinnable problem every two months once a fresh thirty are generated
+ * daily on a device nobody can run `verify` on. So a failed walk is simply walked
+ * again from a derived seed. It costs ~30ms on the one problem in 1800 that needs it,
+ * and it stays deterministic: the same day still rebuilds the same wall.
  */
-export function generateProblem(level = 0, index = 0) {
+export function generateProblem(level = 0, index = 0, day = today()) {
+  const base = problemSeed(level, index, day);
+  for (let attempt = 0; ; attempt++) {
+    // Attempt 0 is the problem's own seed, so the common path is exactly the wall
+    // the seed names and nothing shifted when this retry was added.
+    const wall = buildProblem(level, index, day, attempt ? hashSeed(base, attempt) : base, attempt);
+    if (wall.finish || attempt >= T.PROBLEM_RETRIES) return wall;
+  }
+}
+
+/** One attempt at a problem. Its `finish` is null if the walk dead-ended. */
+function buildProblem(level, index, day, seed, attempt) {
   const { floor } = levelAt(level);
   const style = styleFor(index);
-  const seed = problemSeed(level, index);
   const rng = makeRng(seed);
   const holds = [];
   const stance = startStance();
@@ -177,6 +209,10 @@ export function generateProblem(level = 0, index = 0) {
 
   const wall = {
     seed,
+    // The day this wall belongs to, carried on the wall itself so a top-out is
+    // recorded against the set it came from even if midnight passed mid-problem.
+    day,
+    attempt, // how many walks dead-ended before this one; 0 almost always
     level,
     index,
     style,

@@ -12,6 +12,7 @@
  */
 
 import { T } from '../src/tuning.js';
+import { dayArg } from '../src/day.js';
 import { generateProblem, holdsNear } from '../src/wall.js';
 import {
   createFigure,
@@ -29,6 +30,14 @@ import { createStamina, updateStamina } from '../src/stamina.js';
 
 const DRAG_STEPS = 22; // substeps spent moving a limb to its target
 const SETTLE_STEPS = 18;
+
+// Pinned, because this is the tuning harness as much as it is a gate: the walls are
+// reseeded from the date daily, and a plant rate you cannot compare against the one
+// you measured yesterday tells you nothing about the constant you just changed.
+// `--day=today` (or a specific one) runs it against a set nobody has tuned against,
+// which is the honest check on whether a number generalises. `verify` is the tool
+// that sweeps real days.
+const DAY = dayArg(process.argv, T.REF_DAY);
 
 const step = (fig, stam, n) => {
   for (let i = 0; i < n; i++) {
@@ -179,7 +188,7 @@ function attemptMove(fig, stam, wall, limb, target, watch, move) {
  * than by the player getting stuck halfway up.
  */
 function climb(level, index) {
-  const wall = generateProblem(level, index);
+  const wall = generateProblem(level, index, DAY);
   const fig = createFigure(wall.start);
   const stam = createStamina();
   step(fig, stam, 60);
