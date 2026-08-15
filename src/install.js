@@ -66,8 +66,15 @@ function detect() {
   return ios && !installed();
 }
 
-/** Already added to the home screen and launched from it. */
-function installed() {
+/**
+ * Already added to the home screen and launched from it.
+ *
+ * Exported as well as used here, because the safe-area insets behave differently in
+ * an installed app and that is the one place they cannot be checked while developing
+ * -- the debug overlay reports which of the two you are in, alongside the insets it
+ * actually got. See the status-bar-style comment in index.html.
+ */
+export function installed() {
   // navigator.standalone is iOS's own flag and predates display-mode by years;
   // the media query is the standard one, and only newer Safari answers it.
   if (navigator.standalone === true) return true;

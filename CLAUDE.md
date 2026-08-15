@@ -913,6 +913,25 @@ Sizing is resize-driven off a `position: fixed; inset: 0` stage rather than
 CSS-height-driven, so the dynamic toolbar just resizes the backing store. Safe
 area insets are read from the `#safe-probe` element, since `env()` is CSS-only.
 
+**The status bar style must not be `black-translucent`**, and this is a trap that
+only springs on an installed app. That style puts the web view under the status bar
+and the Dynamic Island — and iOS then reports `env(safe-area-inset-top)` as **0**
+anyway, so the probe reads zero, the HUD offsets by nothing, and the stamina bar
+draws behind the clock. `black` hands the inset to the system, which knows the
+device and needs no arithmetic here; the strip it leaves is black against a
+`#0b0d11` background.
+
+Two things follow from that:
+
+- **iOS bakes this meta tag in when the icon is added to the home screen**, along
+  with `apple-mobile-web-app-title`. Changing it does not reach an already-installed
+  copy — that one has to be deleted and re-added.
+- **The insets are on the debug overlay** (`safe top/right/bottom/left`, and whether
+  this is the `installed` app or a `tab`), because a wrong inset is invisible
+  everywhere except the device it breaks on. The plumbing itself is fine and was
+  tested by overriding the probe's padding: given a 59pt top inset the HUD and the
+  menu both move clear. It was only ever the number that was wrong.
+
 ## Debugging
 
 `window.__game` is exposed in dev — inspect `__game.fig.hip`, `__game.stam.parts`,

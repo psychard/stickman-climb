@@ -10,7 +10,15 @@
     <meta name="theme-color" content="#0b0d11" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- NOT black-translucent, and this is load-bearing. That style puts the web
+         view *under* the status bar and the Dynamic Island, and iOS then reports
+         env(safe-area-inset-top) as 0 anyway -- so #safe-probe reads zero, the HUD
+         offsets by nothing, and the stamina bar ends up behind the clock. It only
+         goes wrong in an installed app, which is the one place it can't be seen
+         during development. With `black` the system insets the content below the
+         status bar itself, which needs no inset arithmetic and knows the device.
+         The strip it leaves is black against a #0b0d11 background. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <!-- The home-screen label on iOS. It comes from here, not from the manifest
          or the title, and iOS truncates it at roughly 12 characters. -->
     <meta name="apple-mobile-web-app-title" content="Stickman Climb" />

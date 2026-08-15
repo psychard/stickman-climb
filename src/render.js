@@ -9,7 +9,7 @@ import { T, levelAt, lerp, clamp, clamp01 } from './tuning.js';
 import { LIMB_IDS, torsoFrame, anchorOf, specFor, ikJoint, centerOfMass } from './body.js';
 import { holdsInRange, styleFor, problemKey } from './wall.js';
 import { dayLabel } from './day.js';
-import { wantsInstallHint, wantsMenuStep } from './install.js';
+import { wantsInstallHint, wantsMenuStep, installed } from './install.js';
 import { updateReady } from './update.js';
 
 // HUD buttons sit in a row under the stamina bar, hence the vertical offset.
@@ -888,6 +888,12 @@ function drawHud(ctx, game) {
       `rise ${wall.stats.rise.toFixed(0)}u  span ${wall.stats.span.toFixed(0)}u  moves ${wall.stats.moves}`,
       `L${wall.level + 1} ${levelAt(wall.level).name} #${wall.index + 1} ${wall.style.id}`,
       `day ${wall.day}  seed ${wall.seed}${wall.attempt ? `  reroll ${wall.attempt}` : ''}`,
+      // The insets, and whether this is the installed app -- the HUD sits under the
+      // Dynamic Island if the top one comes back 0 when it shouldn't, and that can
+      // only ever be seen on a phone. See index.html's status-bar-style comment.
+      `safe ${view.safe.top.toFixed(0)}/${view.safe.right.toFixed(0)}/` +
+        `${view.safe.bottom.toFixed(0)}/${view.safe.left.toFixed(0)}  ` +
+        `${installed() ? 'installed' : 'tab'}`,
     ];
     ctx.font = '11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
