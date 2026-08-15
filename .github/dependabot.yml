@@ -1,0 +1,30 @@
+version: 2
+
+# The actions in pages.yml are pinned to commit SHAs, which is the safe way to
+# depend on someone else's code and the tedious way to keep it current: a SHA
+# says nothing about whether it is a year stale. This is what re-resolves them.
+# Dependabot understands the `# vX.Y.Z` comment beside each pin and moves the
+# hash and the comment together, which is the whole convention pages.yml relies
+# on staying true.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+
+    # One PR for all five actions, not five. They are a set — the Pages actions
+    # in particular have compatibility rules between them (deploy-pages reads
+    # what upload-pages-artifact writes), so reviewing them together is the
+    # honest way to read the change.
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+    labels:
+      - dependencies
+
+# Deliberately no npm entry. The only dependency is vite, it is a devDependency
+# that never reaches a player's phone, and a major bump wants the build output
+# looked at rather than merged on a schedule. Add one here if that stops being
+# true.
