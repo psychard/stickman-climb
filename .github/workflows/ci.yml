@@ -1,0 +1,48 @@
+name: CI
+
+# Checks a pull request before it is merged. pages.yml owns push-to-main and
+# does the deploying; this one never deploys, so the two never overlap.
+#
+# It exists because pages.yml runs `npm run verify` -- the climbability proof --
+# only after a merge has already happened, which puts the gate behind the door.
+# A Dependabot PR bumping the action pins would otherwise arrive with no check
+# on it at all.
+on:
+  pull_request:
+    branches: [main]
+  # So this can be run by hand without opening a pull request to see it work.
+  workflow_dispatch:
+
+# Read the code and nothing else. No `pages: write`, no `id-token: write` --
+# this job has no business deploying, and a PR from a fork should not be able to
+# borrow those. (Dependabot PRs get a read-only token regardless; this needs
+# nothing more.)
+permissions:
+  contents: read
+
+# Push twice to a PR and only the newer run matters.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a SHA with the release in the comment, the same convention
+      # pages.yml uses. Dependabot updates both files together.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The same two commands pages.yml gates the deploy on, run before the
+      # merge instead of after it. `verify` sweeps today plus the next six days,
+      # so it defends the walls players are about to be handed.
+      - run: npm run verify
+
+      - run: npm run build
