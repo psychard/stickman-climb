@@ -678,12 +678,13 @@ Strain is one scalar built from four terms — hold quality, flexion, balance, a
 arm load — and `REST_STRAIN` is the threshold between draining and recovering.
 The whole pacing mechanic is that one number.
 
-It's calibrated against the measured spread of **real route stances** on level 1
-(currently p25 ≈ 0.30, median ≈ 0.38, p90 ≈ 0.66), so about the best third
-recover. **A solver change moves this** — the oscillation fix left the figure
-standing slightly lower, which pushed every stance up ~0.02 of strain and cost 8
-points of rest fraction until `REST_STRAIN` followed it from 0.30 to 0.32. Harder levels are deliberately worse: `ladder` reports rests falling from
-40% of stances on level 1 to 2% on level 5.
+It's calibrated against the measured spread of **real route stances** on level 1,
+which on `REF_DAY` runs p25 0.23 / median 0.30 / p90 0.44, so at `REST_STRAIN`
+0.26 about the best 35% recover. **A solver change moves this** — the oscillation
+fix left the figure standing slightly lower, which pushed every stance's strain up
+and cost a chunk of rest fraction until `REST_STRAIN` followed it. Harder levels
+are deliberately worse: `ladder` reports rests falling from 37% of stances on
+level 1 to 5% on level 5.
 `npm run measure` prints that spread and the resulting recover fraction. Always
 calibrate against it rather than against idealised stances: a clean test-harness
 stance scores ~0.12, far below anything the generator actually produces, and

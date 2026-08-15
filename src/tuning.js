@@ -74,7 +74,7 @@ export const T = {
   // pass, which is how it beat the reach clamps and oscillated. The stiffness is
   // 4x what it was for exactly that reason: ten applications of 0.22 and one of 0.9
   // have about the same authority per substep, and dropping the authority instead
-  // measured as the figure hanging off its arms (45% of bodyweight, vs 37% now).
+  // measured as the figure hanging off its arms (45% of bodyweight, vs 29% now).
   FOOT_PUSH_STIFF: 0.9,
   // ...saturating here, in world units per second. A leg folded up under the hip --
   // an ordinary high step -- would otherwise ask to shove the body 10u in a single
@@ -432,7 +432,7 @@ export const T = {
   // moves one of these, or the day's luck reads as your change.
   //
   // Move distance is NOT the lever it looks like. MOVE_DIST ramps 52 -> 84 across
-  // the ladder but the *achieved* move only goes 62 -> 69, because a limb move is
+  // the ladder but the *achieved* move only goes 51 -> 69, because a limb move is
   // capped by anatomy (ARM.max 68, LEG.max 80) and the generator's feasibility
   // check refuses anything longer. Asking for still-longer moves just costs plant
   // rate. Hold REUSE, not move distance, is what makes a hard wall sparse.
@@ -511,7 +511,10 @@ export const T = {
   // one new hold per limb move the wall has a fixed ~9.5 holds per 100u no matter
   // what else you tune, because a limb can only move so far. Reuse breaks that
   // link -- a foot steps onto the hold a hand left two moves ago, and the move
-  // costs no hold at all.
+  // costs no hold at all. `ladder` measures the result as 12.3 -> 6.0 holds per
+  // 100u across the five levels. (That 9.5 was the endless wall; both ends read
+  // higher on a problem, which is short enough that the start stance's four jugs
+  // are a real fraction of it.)
   //
   // It is also what makes order matter, which is the point: on a sparse wall
   // there may be no legal right-hand move until the right foot has moved, and no
@@ -530,6 +533,12 @@ export const T = {
   // more headroom: at 0.3 the top three rungs all collapsed onto the same wall
   // (the auto-climber reached 1103/1008/1015u -- levels 4 and 5 were the same
   // difficulty). Extending them to 0.1 / 0.04 spread that to 1113/990/863u.
+  //
+  // Those six numbers are HOW FAR THE AUTO-CLIMBER GOT ON THE ENDLESS WALL, and
+  // that measurement no longer exists: a problem has a top, every one is about the
+  // same height, and `ladder` dropped the `climbed` column as flat by construction.
+  // They are kept as the record of why the ends are this wide, not as something to
+  // re-run. The columns that separate the levels today are `choices` and `rests`.
   //
   // These no longer leave level 1's route geometry bit-identical to the pre-menu
   // wall, and nothing can: the generator commits a hold only if the body solver says
