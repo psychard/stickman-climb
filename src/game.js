@@ -416,6 +416,16 @@ function stanceWith(fig, limb, hold) {
  * instead of sixty times a second. Uncached it costs 0.78ms a frame, which does
  * not fit in a 16.7ms budget alongside the solver.
  *
+ * **`canReach` is the opposite and is deliberately not cached.** Its anchor hangs
+ * off the chest or hip and its cone lives in the torso frame, so both translate
+ * and rotate as the body moves under the drag -- which is why rings appear and
+ * disappear while you stretch, and why they have to. Freezing them at drag start
+ * would put the ring back to lying the moment the torso turned, which is the bug
+ * this function exists to fix. Measured over the route drags of all thirty
+ * problems: `canReach` changes its mind about a hold 937 times, `stanceSolvable`
+ * zero -- so the live half is the whole of the churn, and the cached half is
+ * genuinely invariant rather than merely assumed to be.
+ *
  * Measured over the route drags of all thirty problems: 94% of frames do no
  * solves at all and cost 8.5us. The rest is paid on the frame a drag starts,
  * where 4.3 holds are in range on average (max 11) at ~105us each -- 448us

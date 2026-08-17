@@ -631,13 +631,22 @@ state the release sees.
 
 Three things about it are worth knowing:
 
-- **The affordable version exists because `stanceSolvable` doesn't depend on the
-  body.** `solveStatic` seeds from the hold centroids, so its answer holds until
-  another limb changes what it's on, and it can be memoised for the whole drag.
-  Uncached the honest ring costs 0.78ms per frame, which does not fit. Cached,
-  94% of frames do no solves and cost 8.5us; the frame a drag *starts* pays for
-  the whole initial set — 4.3 holds in range on average, 11 at worst, ~105us each,
-  so 448us typical and 1.2ms worst.
+- **Only one of the two halves is cached, and the split is the point.**
+  `stanceSolvable` doesn't depend on the body at all — `solveStatic` seeds from
+  the hold centroids — so its answer holds until another limb changes what it's
+  on, and it is memoised for the whole drag. Uncached the honest ring costs
+  0.78ms per frame, which does not fit. Cached, 94% of frames do no solves and
+  cost 8.5us; the frame a drag *starts* pays for the whole initial set — 4.3
+  holds in range on average, 11 at worst, ~105us each, so 448us typical and 1.2ms
+  worst.
+- **`canReach` is re-run every frame, and that is why rings come and go as you
+  stretch.** Its anchor hangs off the chest or hip and its cone lives in the torso
+  frame, so both move and rotate under the drag: a hold at the edge of the cone
+  genuinely leaves reach when you turn away from it. Freezing the ring at drag
+  start would restore the original bug the moment the torso moved. Measured over
+  the route drags of all thirty problems, `canReach` changes its mind about a hold
+  937 times and `stanceSolvable` zero — so the live half is all of the churn, and
+  the cached half is invariant in fact and not just in argument.
 - **Exactly one hold is drawn bright**: the one a release would take, which is the
   nearest grabbable hold inside `SNAP_RADIUS`. Several holds used to light up as
   "close enough" when only one of them was ever going to be taken.
