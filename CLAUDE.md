@@ -629,7 +629,7 @@ has, for the same reason. `update` runs before `render` and pointer events land
 between frames, so the ring the player last saw is computed from the same body
 state the release sees.
 
-Three things about it are worth knowing:
+Four things about it are worth knowing:
 
 - **Only one of the two halves is cached, and the split is the point.**
   `stanceSolvable` doesn't depend on the body at all — `solveStatic` seeds from
@@ -646,7 +646,11 @@ Three things about it are worth knowing:
   start would restore the original bug the moment the torso moved. Measured over
   the route drags of all thirty problems, `canReach` changes its mind about a hold
   937 times and `stanceSolvable` zero — so the live half is all of the churn, and
-  the cached half is invariant in fact and not just in argument.
+  the cached half is invariant in fact and not just in argument. If the flicker
+  ever becomes annoying, the lever is hysteresis on the ring alone — a slightly
+  wider cone to *keep* a ring than to gain one — but that deliberately buys back a
+  small disagreement with the grab, so measure it before reaching for it. It has
+  been looked at and left alone.
 - **Exactly one hold is drawn bright**: the one a release would take, which is the
   nearest grabbable hold inside `SNAP_RADIUS`. Several holds used to light up as
   "close enough" when only one of them was ever going to be taken.
