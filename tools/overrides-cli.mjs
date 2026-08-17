@@ -105,6 +105,46 @@ function presetPath(argv) {
   return null;
 }
 
+/**
+ * The tool's own positional arguments, with the override flags AND the values of
+ * their space forms removed. `positionalArgs(process.argv)` -- it slices off the
+ * node and script entries itself, the way applyCliOverrides reads the whole argv.
+ *
+ * This exists because filtering on `startsWith('--')` is not enough, and both
+ * tools that take a positional argument had the same hole. In `--set WEDGE_BUDGET=10`
+ * the flag is dropped and its VALUE survives the filter, so it lands in argv[0]
+ * where the tool is looking for a count:
+ *
+ *   npm run fuzz -- --set WEDGE_BUDGET=10     -> Number('WEDGE_BUDGET=10') is NaN,
+ *                                                Array.from({length: NaN}) is [],
+ *                                                "0 runs, 0 settled with problems",
+ *                                                exit 0
+ *   npm run verify -- --set QUALITY_ROUTE.hard=0.2
+ *                                             -> "sweeping NaN days",
+ *                                                "All 0 problems climbable", exit 0
+ *
+ * The override banner printed correctly in both cases, so the run announced that it
+ * was overridden and then said nothing about having measured nothing. A gate that
+ * exits 0 having done no work is worse than one that is too strict, and `verify` is
+ * the climbability proof -- exactly the thing README tells you to re-run under a
+ * `--preset` before landing a generation constant. Same lesson as `presetPath`
+ * above, one layer out: the space form of a flag is two argv entries, not one.
+ */
+export function positionalArgs(argv = process.argv) {
+  const out = [];
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i];
+    // the space forms take the next entry as their value; skip both
+    if (arg === '--set' || arg === '--preset') {
+      i++;
+      continue;
+    }
+    if (arg.startsWith('-')) continue;
+    out.push(arg);
+  }
+  return out;
+}
+
 /** Print the same warning again at the end, where the numbers actually are. */
 export function overrideFooter(values) {
   if (!values || !Object.keys(values).length) return;

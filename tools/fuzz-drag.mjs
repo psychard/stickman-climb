@@ -21,6 +21,29 @@
  *   pose     limbs stay inside their anatomical cones.
  *
  * Failures print a seed; pass it as the second argument to replay just that case.
+ *
+ * WHAT THIS GATES, AND WHAT IT CANNOT
+ *
+ * `torso` and `invert` are zero-tolerance: measured 0 of 6500 runs over 13 days,
+ * and a chest that has passed under the hip mirrors every anatomical limit at
+ * once, so one occurrence is a regression.
+ *
+ * `stretch` and `pose` are NOT zero, and never were. A small fraction of runs
+ * settle with a limb outside its cone, on stances the generator would never build
+ * -- see BUDGET below and the CLAUDE.md section it points at. So those two carry a
+ * rate budget: at or under it the run passes, over it the run fails. Without one
+ * this tool was permanently red at its own baseline, which meant a real move from
+ * 3 runs to 30 looked exactly like a clean run.
+ *
+ * The budget is a rate, and deliberately not a magnitude ceiling, because there is
+ * no honest one available: the baseline's own worst settled cases (15.9u of stretch,
+ * 32.8u of pose) are as bad as the ones a broken constant produces. So a constant
+ * that makes each failure worse without making failures commoner will pass here and
+ * show up only in the worst-settled column of the table below. Measured: POSE_STIFF
+ * at 0.05 takes settled stretch from 1.2u to 4.3u on 2 runs of 300, and exits 0.
+ * READ THE TABLE, don't just take the exit code -- and note that `sim` and `jitter`
+ * own the constants that move it (`npm run jitter -- --set=DRAG_PULL=6.0` is the
+ * example that fails loudly there and not at all here).
  */
 
 import { T } from '../src/tuning.js';
@@ -43,13 +66,50 @@ import { dayArg } from '../src/day.js';
 const SETTLE_LEAD = 45; // substeps allowed for the body to recover before judging
 const SETTLE_JUDGED = 30; // substeps that actually count as "settled"
 
-const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+/** Per-run thresholds: over this on any axis and the run is a problem. */
+const GATE = { stretch: 2, torso: 1, invert: 0, pose: 8 };
+
+/**
+ * ...and what fraction of runs may be a problem before the RUN fails, per axis.
+ *
+ * Measured over 6500 runs -- 500 seeds on each of 13 days between 20260812 and
+ * 20260827, via `--day=` -- because a day's walls are one sample and this rate
+ * varies with them more than it varies with anything else:
+ *
+ *   axis      over gate    rate    worst settled   worst day
+ *   stretch       6       0.09%        15.9u         0.40%
+ *   torso         0       0.00%         0.0u         0.00%
+ *   invert        0       0.00%         0.00         0.00%
+ *   pose         57       0.88%        32.8u         2.20%
+ *   any axis     61       0.94%                      2.20%
+ *
+ * So the budgets are ~2x the worst DAY observed, not a rounding-up of the worst
+ * run: `pose` 4% against a 2.20% worst day and a 0.88% mean, `stretch` 1% against
+ * 0.40% and 0.09%. At the default 300 rounds that is 12 and 3 runs. Picking 2/300
+ * -- what REF_DAY happens to produce, and what CLAUDE.md used to quote as the
+ * expected state -- would have been red on 8 of those 13 days at 300 rounds, where
+ * the counts ran 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 5, 7. It is the same trap REF_DAY
+ * exists to avoid for REST_STRAIN: one day's luck baked into a constant.
+ *
+ * A regression well past these is caught. TORSO_TILT_MAX at 175 (the torso may
+ * invert) gives 21 runs of 300 AND trips the zero-tolerance `invert` axis;
+ * REACH_FINAL_PASSES at 0 (reach stops getting the last word) gives 9 of 300 with
+ * settled stretch at 9.9u. A change inside the budget is not caught by the exit
+ * code, on purpose -- see the header.
+ */
+const BUDGET = { stretch: 0.01, torso: 0, invert: 0, pose: 0.04 };
+
+const args = positionalArgs(process.argv);
 const rounds = Number(args[0] || 300);
 const onlySeed = args[1] ? Number(args[1]) : null;
+if (!Number.isFinite(rounds) || rounds < 1) {
+  console.error(`\n  rounds wants a positive number, got "${args[0]}"\n`);
+  process.exit(2);
+}
 // Pinned, and it has to be: a failure prints its seed so the case can be replayed,
 // and a replay against a wall that changed overnight replays something else. `--day=`
 // moves it for both the run and the replay.
-import { applyCliOverrides, overrideFooter } from './overrides-cli.mjs';
+import { applyCliOverrides, overrideFooter, positionalArgs } from './overrides-cli.mjs';
 
 // MUST precede the DAY line below, which reads T at module scope.
 const OVERRIDES = applyCliOverrides();
@@ -203,20 +263,24 @@ const seeds = onlySeed !== null ? [onlySeed] : Array.from({ length: rounds }, (_
 const agg = { stretch: 0, torso: 0, invert: 0, pose: 0 };
 const aggPull = { stretch: 0, torso: 0, invert: 0, pose: 0 };
 const blame = {};
+// Counted per axis, not just in total: the axes have different baselines, and one
+// number for all four would let an inverted torso hide inside the pose budget.
+const over = { stretch: 0, torso: 0, invert: 0, pose: 0 };
 let bad = 0;
 for (const seed of seeds) {
   const w = fuzz(seed, wall);
   const fails = [];
-  if (w.stretch > 2) fails.push(`stretch ${w.stretch.toFixed(1)}u`);
-  if (w.torso > 1) fails.push(`torso ${w.torso.toFixed(1)}u`);
-  if (w.invert > 0) fails.push('INVERTED TORSO');
-  if (w.pose > 8) fails.push(`pose ${w.pose.toFixed(1)}u`);
+  if (w.stretch > GATE.stretch) fails.push(`stretch ${w.stretch.toFixed(1)}u`);
+  if (w.torso > GATE.torso) fails.push(`torso ${w.torso.toFixed(1)}u`);
+  if (w.invert > GATE.invert) fails.push('INVERTED TORSO');
+  if (w.pose > GATE.pose) fails.push(`pose ${w.pose.toFixed(1)}u`);
   for (const k in agg) {
     if (w[k] > agg[k]) {
       agg[k] = w[k];
       blame[k] = seed;
     }
     if (w.pulling[k] > aggPull[k]) aggPull[k] = w.pulling[k];
+    if (w[k] > GATE[k]) over[k]++;
   }
   if (fails.length) {
     bad++;
@@ -224,13 +288,27 @@ for (const seed of seeds) {
   }
 }
 
+// floor, so a single-seed replay (`npm run fuzz -- 1 12172`) allows nothing and
+// still exits 1 -- you asked about that seed, so its answer is the whole run.
+const allowed = Object.fromEntries(
+  Object.keys(BUDGET).map((k) => [k, Math.floor(seeds.length * BUDGET[k])]),
+);
+const busted = Object.keys(BUDGET).filter((k) => over[k] > allowed[k]);
+
+const row = (k, unit = 'u', dp = 1) =>
+  `  ${k.padEnd(8)} ${agg[k].toFixed(dp).padStart(7)}${unit}      ${aggPull[k].toFixed(dp).padStart(6)}${unit}   ` +
+  `${String(over[k]).padStart(4)}  ${(BUDGET[k] ? `<=${allowed[k]}` : 'none').padStart(5)}` +
+  `${over[k] > 0 && blame[k] !== undefined ? `   (worst seed ${blame[k]})` : ''}`;
+
 console.log(
   `\n${seeds.length} runs, ${bad} settled with problems\n` +
-    `                 settled        while hauling\n` +
-    `  stretch  ${agg.stretch.toFixed(1).padStart(8)}u      ${aggPull.stretch.toFixed(1).padStart(6)}u   (seed ${blame.stretch})\n` +
-    `  torso    ${agg.torso.toFixed(1).padStart(8)}u      ${aggPull.torso.toFixed(1).padStart(6)}u\n` +
-    `  invert   ${agg.invert.toFixed(2).padStart(8)}       ${aggPull.invert.toFixed(2).padStart(6)}\n` +
-    `  pose     ${agg.pose.toFixed(1).padStart(8)}u      ${aggPull.pose.toFixed(1).padStart(6)}u   (seed ${blame.pose})`,
+    `                 settled        while hauling   over  allowed\n` +
+    `${row('stretch')}\n${row('torso')}\n${row('invert', ' ', 2)}\n${row('pose')}`,
+);
+console.log(
+  busted.length
+    ? `\nFAIL: ${busted.map((k) => `${k} ${over[k]}/${seeds.length} over gate, budget ${allowed[k]}`).join('; ')}`
+    : `\n${bad}/${seeds.length} runs settled with problems (${((bad / seeds.length) * 100).toFixed(2)}%) -- within budget.`,
 );
 overrideFooter(OVERRIDES);
-process.exit(bad === 0 ? 0 : 1);
+process.exit(busted.length === 0 ? 0 : 1);

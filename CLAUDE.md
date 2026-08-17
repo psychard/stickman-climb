@@ -35,11 +35,17 @@ budget, plus up to ~1.2ms on the one frame a drag starts.
 
 `sim` tops out all thirty problems cleanly at a 92–96% per-move plant rate,
 `fuzz` — which hauls three limbs at once to arbitrary points — leaves a settled
-violation in 2 runs out of 300, and `jitter` finds a visible limit cycle in 0.2% of
+violation in 0.94% of runs, and `jitter` finds a visible limit cycle in 0.2% of
 the windows it watches — down from 11.3%, with settled stances now clean. All three
 were comprehensively red before the solver passes described in
 [Keeping the body physical](#keeping-the-body-physical) and
 [Three oscillators](#three-oscillators).
+
+That 0.94% is a **known residual with its own section** — see [What fuzz still
+leaves](#what-fuzz-still-leaves). It used to be quoted here as "2 runs out of 300",
+which was REF_DAY's luck: the rate runs 2–11 per 500 depending on the day's walls,
+and `fuzz` exited non-zero at its own baseline, so it was permanently red and could
+not tell a regression from a clean run.
 
 Standing decisions, so they don't get relitigated by accident:
 
@@ -62,6 +68,8 @@ Standing decisions, so they don't get relitigated by accident:
 | **The thirty problems are the day's**, seeded from the local date, and the ticks clear with them at each player's own midnight. What was topped on which day is kept. | Settled — replaced the fixed thirty |
 | **Feel constants get a slider; stability and generation constants get `--set`.** A laptop page at `/__tune` drives the phone live, but only for the 38 constants a hand can honestly judge. The ones whose failure mode is a limit cycle or an unclimbable wall reach you through the tool that can see them. | Settled — see [Tuning it live](#tuning-it-live) |
 | **The tuner reports what to change; it never writes `tuning.js`.** The measured numbers in that file's comments are most of its value, and a mechanical edit leaves them confidently wrong. | Settled — don't add a write endpoint |
+| **`fuzz` has a budget rather than a clean bill.** ~1% of adversarial runs settle with a limb outside its cone, on stances the generator would never build. The gate is a rate, so a regression is visible; the residual is described rather than hidden. | Tolerated, not settled — the fix is in `stanceSolvable`, see [What fuzz still leaves](#what-fuzz-still-leaves) |
+| **Path dependence is a feature, and only its extreme is a bug.** Reaching for the same hold from the left or from the right can leave the torso differently, and that reads as natural — the body remembers how it got there. What is wrong is never that two paths differ, only that one of them lands somewhere *anatomically impossible*. | Settled — don't "fix" the solver into path independence |
 
 The brief in `docs/BRIEF.md` has been revised where playtesting proved it wrong;
 its Revisions section records what changed and why.
@@ -95,6 +103,25 @@ then paste into `tuning.js` to justify a value it had never applied. Scan argv b
 index for the same reason; `argv.indexOf(arg)` finds the *first* match, which silently
 dropped the second of two space-form `--set` flags.
 
+**The space form is two argv entries, and the two tools that take a positional
+argument both forgot the second one.** `fuzz` takes a round count and `verify` a day
+count, both of which used to be found by filtering out anything starting with `--`.
+That drops the flag and keeps its *value*, which then lands in argv[0] where the
+count is read:
+
+```
+npm run fuzz -- --set WEDGE_BUDGET=10       # "0 runs, 0 settled with problems", exit 0
+npm run verify -- --set QUALITY_ROUTE.hard=0.2  # "sweeping NaN days",
+                                            # "All 0 problems climbable", exit 0
+```
+
+Both printed the override banner correctly and then said nothing about having
+measured nothing — and `verify` is the climbability proof, which is exactly what
+README tells you to re-run under a `--preset` before landing a generation constant.
+**A gate that exits 0 having done no work is worse than one that is too strict.**
+`positionalArgs()` in `tools/overrides-cli.mjs` is the shared fix; a count that
+isn't a positive number is now an error (exit 2), not a zero-length run.
+
 The walls are reseeded from the date every day, so **which day a tool runs against is
 part of what it measures**. `verify` sweeps forward from today (`npm run verify -- 30`
 for a longer sweep); everything else pins `T.REF_DAY` so its numbers are comparable
@@ -105,6 +132,23 @@ run to run. All of them take `--day=YYYYMMDD` or `--day=today`. See
 answer "what does it do?". `sim` plays cooperatively and `fuzz` plays adversarially,
 and they catch different things — the whole multi-limb-drag regime was unmeasured
 until `fuzz` existed, and it was badly broken.
+
+**`fuzz` gates per axis, and two of the four axes have a budget.** `torso` and
+`invert` are zero-tolerance: measured 0 of 6500 runs, and a chest under the hip
+mirrors every anatomical limit at once. `stretch` and `pose` are not zero and never
+were, so they carry a rate budget (1% and 4%) set at roughly twice the worst day
+measured — see [What fuzz still leaves](#what-fuzz-still-leaves). One budget across
+all four axes would let an inverted torso hide inside the pose allowance, which is
+why they are counted separately.
+
+**What that budget cannot catch is a constant that makes each failure worse without
+making failures commoner**, and there is no honest magnitude ceiling to add for it:
+the baseline's own worst settled cases (15.9u of stretch, 32.8u of pose) are already
+as bad as a broken constant's. Measured: `--set=POSE_STIFF=0.05` takes settled stretch
+from 1.2u to 4.3u on 2 runs of 300 and exits 0. So read the table, not just the exit
+code. The count is a weak signal in general — `--set=DRAG_PULL=6.0`, the value this
+repo keeps as its worked example of a bad constant, does not move `fuzz` at all and
+takes `jitter` from 0.2% to 10.2%.
 
 `jitter` covers a third regime neither of them could see: a body that is *stable*
 by every invariant they check, and oscillating. It watches a second of no input
@@ -139,6 +183,14 @@ nothing else — no `pages: write`, no `id-token: write` — because a pull requ
 from a fork has no business borrowing the credentials that publish the site.
 The two triggers don't overlap: `pages.yml` owns push-to-`main`, `ci.yml` owns
 pull requests, so nothing deploys twice.
+
+**Only `verify` and `build` run in CI** — not `sim`, `fuzz`, `jitter`, `ladder` or
+`measure`, and not `tune:check`. Those are the tuning harness: they are pinned to
+`T.REF_DAY`, several report numbers rather than pass/fail, and their thresholds are
+calibrated against distributions that move whenever the solver does. `verify` is the
+one check whose subject is the walls players are about to be handed. So a solver
+change that breaks `fuzz` or `jitter` is caught by running them, not by the merge
+gate — which is the whole reason their exit codes have to mean something.
 
 **The site is served at the root of its own subdomain, so there is no `base` in
 `vite.config.js`** and dev, `preview` and the deployed build all agree on `/`.
@@ -648,6 +700,79 @@ it got. `REACH_FINAL_PASSES` re-closes the envelope at the end with only the tor
 kept valid alongside it. Over-stretch is the violation that reads as broken, so it
 wins the tie — and measured over 250 moves x 4 seeds this *raised* plant rate
 (L5 90.3% -> 91.4%), so it is not a trade against reachability.
+
+### What fuzz still leaves
+
+**The path dependence itself is wanted, so read this section narrowly.** Reaching the
+same hold from the left or from the right can leave the torso turned differently, and
+playtesting says that feels right rather than wrong — the body remembers the approach.
+So the target is never "make the solver path-independent"; it is only "no path may end
+in a pose a body cannot make". Everything below is about that second thing.
+
+**0.94% of adversarial runs settle with a limb outside its cone**, and that is a real
+defect rather than an accounting artifact — the figure is left standing with a foot up
+by its chest, and it does not clear on its own. It is worth knowing precisely, because
+it is the thing `fuzz`'s budget tolerates, and because the shape of it says where a fix
+would have to go. The per-axis rates are over 6500 runs — 500 seeds on each of 13 days,
+since a day's walls move this more than anything else does:
+
+| axis | over gate | rate | worst settled | worst day |
+|---|---|---|---|---|
+| `stretch` (> 2u) | 6 | 0.09% | 15.9u | 0.40% |
+| `torso` (> 1u) | 0 | 0.00% | 0.0u | 0.00% |
+| `invert` (> 0) | 0 | 0.00% | 0.00 | 0.00% |
+| `pose` (> 8u) | 57 | 0.88% | 32.8u | 2.20% |
+
+Five things about it, each measured rather than argued. The per-failure numbers below
+are from a separate 3900-run sweep (13 days x 300 seeds) that classified each of the
+39 failures it found:
+
+- **The stances are ones the generator would never build.** 36 of those 39
+  failures fail `stanceFeasible` — feet above hands, crossed limbs. That is the
+  region `stanceSolvable` deliberately leaves open, on the stated grounds that those
+  rules are "the generator's taste and shouldn't veto what a player does
+  deliberately". So the residual sits exactly where the design consciously stopped
+  checking, which is coherent but is not the same as harmless.
+- **The wedge escape is losing a standoff, not giving up.** 0 of 39 had exhausted
+  `WEDGE_BUDGET` (they sat at 0.0–0.63s of 1.0s), and `--set=WEDGE_BUDGET=10` changes
+  nothing at all: the same two seeds fail with the same 15.1u and 32.8u. `escapeWedge`
+  pushes toward the global answer every substep and the relaxation walks straight
+  back, so the end-of-substep state is *identical* every frame. The body is visually
+  still and in the wrong pose, which is why `jitter` cannot see this and `fuzz` can.
+- **Seeded directly onto `solveStatic`'s answer, one case stays and one leaves.** For
+  seed 12003 the 0.00u answer is a stable live equilibrium — placed there, the body
+  holds it for 3s — so the escape simply cannot find the path from the wedged side.
+  For 12172 the body *departs* the 0.00u answer within 5 substeps and lands in the
+  32.8u wedge. **So `stanceSolvable` is making a promise the live solver does not
+  always keep**, and that, not a stiffness, is where a real fix would start. It is
+  also why this is not a one-line change: that predicate gates planting, generation
+  and `verify` alike.
+- **The game's backstop covers only the worst of it.** 1 of 39 exceeded
+  `FALL_VIOLATION`, so the attempt ended with `CAME OFF` 0.3s later. The other 38 sit
+  *below* 30u, which means the game leaves you in them indefinitely. Don't reach for
+  `FALL_VIOLATION` as the fix — dropping the player for a 9u cone violation would
+  end climbs that are otherwise fine.
+- **It is not a trap, and that bounds how bad it is.** Every recovery a player could
+  perform clears it to 0.0u within a second: tapping the offending limb off, tapping a
+  *different* limb off, or dragging the limb away and re-grabbing. Only sitting still
+  keeps it. And re-planting the offending limb on the very same hold is **refused** by
+  `canReach`/`stanceSolvable` from the recovered position, so the game will not let you
+  straight back in — the bad stance has a narrow entrance and many exits. Note that
+  entrance is not specifically a multi-finger thing: of the moves that cause one, 37%
+  hauled a single limb, 41% two and 22% three. What they share is the *destination* — a
+  uniformly random point up to 3x max reach — and a stance with only two or three limbs
+  left on the wall (98% of cases). Note the good pose genuinely exists and is reachable: release
+  the *hand* instead and the same foothold settles at `up 12` against a `FOOT_RISE` of
+  14, cleanly legal. So this is a convergence-and-display defect in a stance you can
+  always walk out of — not a dead end, and not a wall that cannot be climbed. **It does
+  not drain you either**, or not meaningfully: measured on the same holds, the wedged
+  pose strains 1.19 against the correct pose's 0.86 (7s to empty vs 10s), so the burn
+  is the stance's — hanging off one hand and one opposite foot — and not the bug's.
+- **Raising the pose gate would be the dishonest fix.** The settled distribution is a
+  smooth tail — over 3600 runs, 93.8% under 0.5u, then 2.0% out to 2u, 2.1% to 4u,
+  1.1% to 8u, and 1.0% beyond — so 8u has no cliff under it and any threshold there is
+  a judgement. Moving it to 24u would show a clean run and change nothing about the
+  figure.
 
 ### You cannot enter a stance that has no solution
 

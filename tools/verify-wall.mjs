@@ -32,13 +32,21 @@ import { T } from '../src/tuning.js';
 import { today, dayArg, shiftDay, dayLabel } from '../src/day.js';
 import { generateProblem, routeStances, moveDistances } from '../src/wall.js';
 import { stanceFeasible, solveStatic } from '../src/body.js';
-import { applyCliOverrides, overrideFooter } from './overrides-cli.mjs';
+import { applyCliOverrides, overrideFooter, positionalArgs } from './overrides-cli.mjs';
 
 // MUST precede anything that reads T at module scope -- `first` below does.
 const OVERRIDES = applyCliOverrides();
 
 const args = process.argv.slice(2);
-const days = Number(args.find((a) => !a.startsWith('--')) || 7);
+// positionalArgs, not a `--` filter: the space form of `--set` leaves its VALUE
+// looking like the day count, which swept NaN days and reported "All 0 problems
+// climbable" with exit 0. See positionalArgs in overrides-cli.mjs.
+const positional = positionalArgs(process.argv);
+const days = Number(positional[0] || 7);
+if (!Number.isFinite(days) || days < 1) {
+  console.error(`\n  day count wants a positive number, got "${positional[0]}"\n`);
+  process.exit(2);
+}
 const first = dayArg(args, today());
 
 const avg = (a) => a.reduce((x, y) => x + y, 0) / (a.length || 1);

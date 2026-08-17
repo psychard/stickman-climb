@@ -199,6 +199,20 @@ including the two that make up the top-out. `sim` replays the same routes throug
 the live per-frame physics and fails if grabs start missing or a problem stops
 being toppable. Run both after touching `src/tuning.js` or `src/body.js`.
 
+Only `verify` and `build` run in CI — the rest are the tuning harness, pinned to a
+reference day and calibrated against distributions, so they're checks you run rather
+than gates on a merge.
+
+`fuzz` and `jitter` both pass with a **budget** rather than a clean sheet, and both
+print the rate they measured against it. `fuzz` leaves about 1% of its adversarial
+runs settled with a limb outside its anatomical cone — on stances the generator would
+never build, feet above hands and limbs crossed, which the game allows on purpose
+because those rules are the generator's taste and shouldn't veto what you do
+deliberately. It's a known residual with a described cause; `CLAUDE.md` has the
+measurements and where a fix would have to go. What the exit code catches is the rate
+*moving*, so read the table too — a change that makes each failure worse without
+making failures commoner passes.
+
 ## Layout
 
 Tuning constants — reach lengths, drain and recovery rates, hold quality scale,
