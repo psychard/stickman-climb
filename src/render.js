@@ -537,7 +537,7 @@ export function draw(ctx, game) {
   // drew `spec.max` from the anchor, but a grab is gated on `canReach`, which also
   // wants the pose cone and a minimum distance, and the body moves under the drag
   // anyway -- so the disc promised holds you couldn't take and hid ones you could.
-  const dragging = LIMB_IDS.map((id) => fig.limbs[id]).filter((l) => l.drag);
+  const dragging = LIMB_IDS.map((id) => fig.limbs[id]).filter((l) => l.drag && l.drag.reach);
 
   for (const hold of visible) {
     const hx = toScreenX(hold.x);
@@ -569,18 +569,18 @@ export function draw(ctx, game) {
     }
   }
 
-  // holds the dragged limb could actually take
+  // Holds the dragged limb could actually take, and the one it would get. Both
+  // come from `refreshTargets` in game.js, which is the same predicate pointerUp
+  // grabs with -- the ring is a promise, so it is not allowed a cheaper opinion
+  // than the release it is predicting. Faint means in range; bright means let go
+  // now and this is the hold you take.
   for (const limb of dragging) {
-    const a = anchorOf(fig.hip, fig.chest, limb);
-    const spec = specFor(limb.kind);
-    for (const hold of visible) {
-      const d = Math.hypot(hold.x - a.x, hold.y - a.y);
-      if (d > spec.max || d < spec.min * 0.55) continue;
-      const near = Math.hypot(hold.x - limb.pos.x, hold.y - limb.pos.y) < T.SNAP_RADIUS;
+    for (const hold of limb.drag.reach) {
+      const take = hold === limb.drag.take;
       ctx.beginPath();
-      ctx.arc(toScreenX(hold.x), toScreenY(hold.y), (hold.r + (near ? 7 : 4)) * s, 0, Math.PI * 2);
-      ctx.strokeStyle = near ? T.COL.inRange : 'rgba(255,209,102,0.45)';
-      ctx.lineWidth = (near ? 2.4 : 1.4) * s;
+      ctx.arc(toScreenX(hold.x), toScreenY(hold.y), (hold.r + (take ? 7 : 4)) * s, 0, Math.PI * 2);
+      ctx.strokeStyle = take ? T.COL.inRange : 'rgba(255,209,102,0.45)';
+      ctx.lineWidth = (take ? 2.4 : 1.4) * s;
       ctx.stroke();
     }
   }

@@ -23,9 +23,10 @@ Working and verified: draggable limbs with multitouch, reach limits with body
 lunge, anatomical pose limits, geometric load distribution, stamina with rest and
 recovery, falling, a balance limit once both hands are off the wall, scrolling
 camera, seeded walls that are climbable by construction, thirty short boulder problems in six styles across five difficulties
-**regenerated every day from the local date**, top-outs matched with both hands, and
-ticks that reset each midnight and are kept per day. Frame cost ~0.3ms of a
-16.7ms budget.
+**regenerated every day from the local date**, top-outs matched with both hands,
+ticks that reset each midnight and are kept per day, and reach rings that run the
+real grab rather than an approximation of it. Frame cost ~0.3ms of a 16.7ms
+budget, plus up to ~1.2ms on the one frame a drag starts.
 
 `sim` tops out all thirty problems cleanly at a 92–96% per-move plant rate,
 `fuzz` — which hauls three limbs at once to arbitrary points — leaves a settled
@@ -48,6 +49,7 @@ Standing decisions, so they don't get relitigated by accident:
 | **With no hand on the wall your weight has to be over your feet.** A hard cap on how far past the base of support the body can be dragged, and ~0.5s of budget out there before `OFF BALANCE`. Scoped to the no-hands case, which no route stance is ever in. | Settled — replaced "leaning out costs stamina and nothing else" |
 | **Difficulty is one scalar.** A level sets a *floor* under the same easy→hard number the height ramp already drives; there is no second difficulty system. | Settled |
 | **The reach affordance is rings on the holds, not a reach envelope.** A translucent `spec.max` disc around the socket was drawn and removed: a grab is gated on `canReach` (pose cone and a minimum distance too) and the body moves under the drag, so the disc drew a boundary that was neither the real limit nor a useful one. | Settled — don't reinstate the disc |
+| **A ring is a promise, so it runs the real grab.** The renderer used to test its own cheap version and disagreed with the release on 40% of the rings it drew. One hold is drawn bright — the one a release takes — rather than every hold that is merely close. | Settled — replaced the distance-band ring |
 | **Falling returns to the menu**, carrying the reason and height with it. There is no separate retry screen. | Settled |
 | **Offline is a cached shell, and an update is offered rather than applied.** A new build waits behind a band on the menu until it's tapped; nothing reloads mid-climb. | Settled |
 | **A wall is a short problem with a top**, not an endless climb: ~430u, ended by matching a finish hold with both hands. Six per level, in styles (traverse, foot match, reachy...), ticked off when topped. | Settled — replaced the endless wall |
@@ -604,6 +606,51 @@ dragging moves the body but not the holds. It is `stanceSolvable` and not
 `stanceFeasible` because the crossed-limb and hands-above-feet rules are the
 generator's taste and shouldn't veto what a player does deliberately.
 
+### The ring has to run the real grab, and now does
+
+The rings on the holds are the only thing telling the player what a drag will do,
+and they were drawing a **cheaper predicate than the release they were
+predicting**: a raw distance band off the anchor, with no pose cone and no
+`stanceSolvable`. So a hold could be circled, tapped and simply not taken — which
+reads as the game not working, because from the outside it isn't distinguishable
+from that.
+
+Measured over 8500 frames of route drags before the fix: **40% of the rings drawn
+were holds the release would refuse**, and **14% of the bright ones**. Nearly all
+of it (93%) was the missing pose cone — the ring cheerfully offered the right hand
+a hold past the left shoulder — and the rest was the stance check. The
+distance test itself was fine, since the band was if anything stricter than
+`canReach`, so there were no holds it hid that you could actually take.
+
+`refreshTargets()` in `game.js` is now **the only place either question is
+answered**. It runs during `update`, stores the answer on the drag, and the
+renderer draws it while `pointerUp` grabs it — the same discipline `menuRects`
+has, for the same reason. `update` runs before `render` and pointer events land
+between frames, so the ring the player last saw is computed from the same body
+state the release sees.
+
+Three things about it are worth knowing:
+
+- **The affordable version exists because `stanceSolvable` doesn't depend on the
+  body.** `solveStatic` seeds from the hold centroids, so its answer holds until
+  another limb changes what it's on, and it can be memoised for the whole drag.
+  Uncached the honest ring costs 0.78ms per frame, which does not fit. Cached,
+  94% of frames do no solves and cost 8.5us; the frame a drag *starts* pays for
+  the whole initial set — 4.3 holds in range on average, 11 at worst, ~105us each,
+  so 448us typical and 1.2ms worst.
+- **Exactly one hold is drawn bright**: the one a release would take, which is the
+  nearest grabbable hold inside `SNAP_RADIUS`. Several holds used to light up as
+  "close enough" when only one of them was ever going to be taken.
+- **`pointerUp` recomputes rather than reading the cached `take`.** Nothing has
+  moved the body, so it gets the same answer for free off the memo, and it also
+  covers the flick that goes down, past `TAP_SLOP` and up inside a single frame,
+  where no `update` has run to fill the cache in.
+
+`sim` was gating on `canReach` alone here too, with `stanceSolvable` imported and
+never called. Adding it changed no number on any of the thirty problems — route
+stances are feasible by construction — but a harness measuring a laxer gate than
+the game enforces is how a divergence this size stays invisible.
+
 ### The wedge escape
 
 The relaxation is local and path-dependent, so it still has more than one stable
@@ -1020,7 +1067,14 @@ writes real history. The debug overlay carries the day and seed, plus a `reroll`
 count on the rare problem whose first walk dead-ended.
 
 Frame cost is ~0.3ms of a 16.7ms budget, so if the browser reports a low fps it's
-throttling, not the game — check `msUpdate` / `msRender` before optimising.
+throttling, not the game — check `msUpdate` / `msRender` before optimising. The
+one honest spike is the frame a drag starts, which lands in `msUpdate` and pays
+for the whole ring set at once; see [The ring has to run the real
+grab](#the-ring-has-to-run-the-real-grab-and-now-does).
+
+`__game.fig.limbs.RH.drag` carries the ring state while a limb is being dragged:
+`reach` is the Set of holds drawn with a ring and `take` is the one drawn bright,
+which is exactly what a release will plant.
 
 Note that `requestAnimationFrame` gets throttled when the browser pane isn't
 focused, which makes rAF-driven browser automation flaky. Prefer `npm run sim`

@@ -31,6 +31,17 @@ import { createStamina, updateStamina } from '../src/stamina.js';
 const DRAG_STEPS = 22; // substeps spent moving a limb to its target
 const SETTLE_STEPS = 18;
 
+/** The four-hold stance that would result from `limb` taking `hold`. As game.js. */
+function stanceWith(fig, limb, hold) {
+  const pts = {};
+  for (const id of LIMB_IDS) {
+    const other = fig.limbs[id];
+    if (other !== limb && other.hold) pts[id] = other.hold;
+  }
+  pts[limb.id] = hold;
+  return pts;
+}
+
 // Pinned, because this is the tuning harness as much as it is a gate: the walls are
 // reseeded from the date daily, and a plant rate you cannot compare against the one
 // you measured yesterday tells you nothing about the constant you just changed.
@@ -156,8 +167,13 @@ function attemptMove(fig, stam, wall, limb, target, watch, move) {
     if (other !== limb.id && !fig.limbs[other].hold) watch.peels++;
   }
 
+  // The same two-part gate the game grabs with. `stanceSolvable` has never once
+  // changed the outcome here -- route stances are feasible by construction, which
+  // is the whole point of the generator -- but it was imported and not called, and
+  // a harness measuring a laxer gate than the game enforces is how the ring came
+  // to disagree with the release in the first place.
   for (const hold of holdsNear(wall, limb.pos, T.SNAP_RADIUS)) {
-    if (canReach(fig, limb, hold)) {
+    if (canReach(fig, limb, hold) && stanceSolvable(stanceWith(fig, limb, hold))) {
       limb.hold = hold;
       break;
     }
