@@ -49,6 +49,11 @@ const onlySeed = args[1] ? Number(args[1]) : null;
 // Pinned, and it has to be: a failure prints its seed so the case can be replayed,
 // and a replay against a wall that changed overnight replays something else. `--day=`
 // moves it for both the run and the replay.
+import { applyCliOverrides, overrideFooter } from './overrides-cli.mjs';
+
+// MUST precede the DAY line below, which reads T at module scope.
+const OVERRIDES = applyCliOverrides();
+
 const DAY = dayArg(process.argv, T.REF_DAY);
 
 /** The stance that would result from `limb` taking `hold`; mirrors game.js. */
@@ -227,4 +232,5 @@ console.log(
     `  invert   ${agg.invert.toFixed(2).padStart(8)}       ${aggPull.invert.toFixed(2).padStart(6)}\n` +
     `  pose     ${agg.pose.toFixed(1).padStart(8)}u      ${aggPull.pose.toFixed(1).padStart(6)}u   (seed ${blame.pose})`,
 );
+overrideFooter(OVERRIDES);
 process.exit(bad === 0 ? 0 : 1);

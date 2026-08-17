@@ -32,6 +32,10 @@ import { T } from '../src/tuning.js';
 import { today, dayArg, shiftDay, dayLabel } from '../src/day.js';
 import { generateProblem, routeStances, moveDistances } from '../src/wall.js';
 import { stanceFeasible, solveStatic } from '../src/body.js';
+import { applyCliOverrides, overrideFooter } from './overrides-cli.mjs';
+
+// MUST precede anything that reads T at module scope -- `first` below does.
+const OVERRIDES = applyCliOverrides();
 
 const args = process.argv.slice(2);
 const days = Number(args.find((a) => !a.startsWith('--')) || 7);
@@ -140,4 +144,5 @@ console.log(
     ? `\nAll ${problems} problems climbable and toppable (tolerance ${T.GEN_TOLERANCE}u).`
     : `\n${failures}/${problems} problems FAILED.`,
 );
+overrideFooter(OVERRIDES);
 process.exit(failures === 0 ? 0 : 1);

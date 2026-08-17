@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>climb — tune</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d11;
+        --panel: #161b23;
+        --line: rgba(255, 255, 255, 0.09);
+        --text: #dfe6f0;
+        --dim: #7f8b9e;
+        --hot: #ffd166;
+        --good: #7dd3a0;
+        --bad: #ef6f6c;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          13px/1.45 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+      }
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+        padding: 10px 16px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+      header h1 {
+        margin: 0;
+        font-size: 13px;
+        letter-spacing: 0.14em;
+        font-weight: 600;
+      }
+      .pill {
+        padding: 2px 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .pill.live {
+        color: var(--good);
+        border-color: color-mix(in srgb, var(--good) 45%, transparent);
+      }
+      .pill.stale {
+        color: var(--bad);
+        border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+      }
+      button {
+        font: inherit;
+        color: var(--text);
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 3px 9px;
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--hot);
+        color: var(--hot);
+      }
+      main {
+        padding: 8px 16px 56px;
+        max-width: 900px;
+      }
+      .slots {
+        display: inline-flex;
+      }
+      button.slot {
+        border-radius: 0;
+        min-width: 30px;
+      }
+      #slot-A {
+        border-radius: 5px 0 0 5px;
+      }
+      #slot-B {
+        border-radius: 0 5px 5px 0;
+        border-left: 0;
+      }
+      button.slot.on {
+        color: var(--bg);
+        background: var(--hot);
+        border-color: var(--hot);
+      }
+      #note {
+        flex: 1 1 190px;
+        min-width: 140px;
+        font: inherit;
+        color: var(--text);
+        background: #0e1218;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 3px 7px;
+      }
+      .row.differs .name::after {
+        content: ' ⇄';
+        color: var(--hot);
+      }
+      #report {
+        margin: 10px 0 18px;
+        border: 1px solid color-mix(in srgb, var(--hot) 40%, transparent);
+        border-radius: 6px;
+        background: #0e1218;
+      }
+      .report-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+      .report-head b {
+        flex: 1;
+        color: var(--hot);
+      }
+      #report-body {
+        margin: 0;
+        padding: 12px;
+        max-height: 46vh;
+        overflow: auto;
+        white-space: pre-wrap;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .report-note {
+        margin: 0;
+        padding: 8px 12px 10px;
+        color: var(--dim);
+        border-top: 1px solid var(--line);
+      }
+      .group {
+        margin: 18px 0 6px;
+        color: var(--dim);
+        letter-spacing: 0.12em;
+        font-size: 11px;
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+      }
+      .group .tool {
+        color: var(--hot);
+        letter-spacing: 0;
+        text-transform: none;
+        white-space: nowrap;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 210px 1fr 92px 26px;
+        align-items: center;
+        gap: 10px;
+        padding: 3px 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+      }
+      .row.changed .name {
+        color: var(--hot);
+      }
+      .name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .name .from {
+        color: var(--dim);
+      }
+      input[type='range'] {
+        width: 100%;
+        accent-color: var(--hot);
+      }
+      input[type='number'] {
+        width: 100%;
+        font: inherit;
+        color: var(--text);
+        background: #0e1218;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 2px 5px;
+      }
+      .reset {
+        border: 0;
+        color: var(--dim);
+        padding: 0;
+        visibility: hidden;
+      }
+      .row.changed .reset {
+        visibility: visible;
+      }
+      #errors {
+        margin: 14px 0;
+        color: var(--bad);
+        white-space: pre-wrap;
+      }
+      /* A full-width row of the sticky header rather than a second sticky element
+         of its own: the header wraps to two or three lines depending on window
+         width, so any hardcoded `top` here is wrong at some width -- and was,
+         covering the header and hiding the first slider behind it. The negative
+         margins bleed it to the header's edges; the -10px cancels the header's
+         bottom padding so it meets the header's own border. */
+      #readout {
+        flex: 1 1 100%;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 18px;
+        padding: 8px 16px;
+        margin: 2px -16px -10px;
+        background: #10141b;
+        border-top: 1px solid var(--line);
+        color: var(--dim);
+      }
+      #readout.stale {
+        opacity: 0.4;
+      }
+      #readout b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      /* The name column is narrow and the constants are not self-describing, so
+         each row carries a line of prose across the full grid width. */
+      .desc {
+        grid-column: 1 / -1;
+        padding: 0 0 3px 6px;
+        color: var(--dim);
+        font-size: 11px;
+        line-height: 1.35;
+      }
+      .row.changed .desc {
+        color: color-mix(in srgb, var(--hot) 55%, var(--dim));
+      }
+      .dist {
+        grid-column: 1 / -1;
+        padding: 2px 0 6px 6px;
+        color: var(--dim);
+      }
+      .dist b {
+        color: var(--hot);
+        font-weight: 600;
+      }
+      .dist .thin {
+        color: var(--bad);
+      }
+      #hint {
+        color: var(--dim);
+        margin: 10px 0 0;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>CLIMB · TUNE</h1>
+      <span class="pill" id="conn">connecting…</span>
+      <span class="pill" id="rev">rev –</span>
+      <span class="pill" id="count">0 changed</span>
+      <span class="slots">
+        <button id="slot-A" class="slot">A</button><button id="slot-B" class="slot">B</button>
+      </span>
+      <button id="copy-ab" title="seed a comparison from what is in the active slot">
+        copy A→B
+      </button>
+      <input id="note" placeholder="mark this: what did it feel like?" />
+      <button id="mark">mark</button>
+      <button id="copy-log">copy log</button>
+      <button id="save-preset" title="download the active slot for npm run sim -- --preset">
+        save preset
+      </button>
+      <button id="commit">commit…</button>
+      <button id="reset-all">reset all</button>
+      <div id="readout" class="stale">waiting for the game…</div>
+    </header>
+    <main>
+      <div id="errors"></div>
+      <div id="report" hidden>
+        <div class="report-head">
+          <b>to land these values</b>
+          <button id="copy-report">copy as markdown</button>
+          <button id="close-report">close</button>
+        </div>
+        <pre id="report-body"></pre>
+        <p class="report-note">
+          Nothing here has been written. <code>src/tuning.js</code> carries the measured numbers
+          that justify each constant, so a value can only land alongside a re-read of the prose
+          above it — a mechanical edit would leave the file confidently wrong.
+        </p>
+      </div>
+      <div id="controls"></div>
+      <p id="hint">
+        Values are pushed to every connected game instance as they move. Nothing is written to
+        <code>src/tuning.js</code> — landing a good number is a separate, deliberate step.
+      </p>
+    </main>
+    <script type="module" src="/tools/tune/page.js"></script>
+  </body>
+</html>

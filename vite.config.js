@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { climbTune } from './tools/tune/plugin.mjs';
 
 /**
  * Stamp `dist/sw.js` with what this build actually contains.
@@ -60,7 +61,9 @@ function walk(dir, prefix) {
 // '/stickman-climb/' for the build *and* for preview — `vite preview` reports
 // command 'serve' exactly like the dev server, so a plain build check misses it.
 export default defineConfig({
-  plugins: [serviceWorker()],
+  // climbTune is apply:'serve' and serviceWorker is apply:'build', so exactly one
+  // of them is ever active. The tuning rig cannot reach a built site.
+  plugins: [serviceWorker(), climbTune()],
   server: {
     // 0.0.0.0 so the phone / ngrok can reach it.
     host: true,

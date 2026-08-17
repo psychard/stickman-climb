@@ -14,7 +14,8 @@
     "measure": "node tools/measure.mjs",
     "ladder": "node tools/ladder.mjs",
     "fuzz": "node tools/fuzz-drag.mjs",
-    "jitter": "node tools/jitter.mjs"
+    "jitter": "node tools/jitter.mjs",
+    "tune:check": "node tools/tune-check.mjs && node tools/tune/protocol-check.mjs"
   },
   "devDependencies": {
     "vite": "^7.1.3"

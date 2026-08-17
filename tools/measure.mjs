@@ -25,6 +25,11 @@ import { createStamina, updateStamina, computeStrain } from '../src/stamina.js';
 // overnight cannot tell you what your constant did. So this pins one day, and the
 // numbers quoted in tuning.js are that day's. `--day=YYYYMMDD` (or `--day=today`)
 // asks whether a conclusion was a property of the model or of one set of walls.
+import { applyCliOverrides, overrideFooter } from './overrides-cli.mjs';
+
+// MUST precede the DAY line below, which reads T at module scope.
+const OVERRIDES = applyCliOverrides();
+
 const DAY = dayArg(process.argv, T.REF_DAY);
 
 const cx = T.WALL_W / 2;
@@ -213,3 +218,5 @@ console.log('\n=== what tapping a limb off buys you ===\n');
     );
   }
 }
+
+overrideFooter(OVERRIDES);

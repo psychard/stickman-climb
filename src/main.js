@@ -32,6 +32,16 @@ window.__game = game;
 window.__installHint = forceInstallHint;
 window.__updateBand = forceUpdateBand;
 
+// Sliders on a laptop, game on the phone: see src/tune.js. The DEV branch and
+// the *dynamic* import are both deliberate -- DEV becomes `false` at build time,
+// so the branch is eliminated, the import is unreachable, and no chunk is
+// emitted. A static top-level import would ship the rig to players. `resize` is
+// handed over rather than exposed on window, since a couple of constants are
+// only read there.
+if (import.meta.env.DEV) {
+  import('./tune.js').then((m) => m.installTuning(game, resize));
+}
+
 // Only a built site gets a service worker: one sitting in front of the dev
 // server serves you yesterday's bundle and wastes an afternoon. `vite preview`
 // is a real build, so the offline path can still be rehearsed locally.
@@ -105,6 +115,17 @@ function frame(now) {
   // frame gap alone can't tell you whether you're CPU-bound or just throttled
   game.msUpdate += (t1 - t0 - game.msUpdate) * 0.05;
   game.msRender += (t2 - t1 - game.msRender) * 0.05;
+
+  // Live-tuning telemetry, if the rig is loaded and a tuner is actually open.
+  // Deliberately AFTER msRender is taken, so it cannot inflate the numbers it
+  // reports -- and timed on its own, because a measurement rig that costs frame
+  // time silently is worse than none. Only src/tune.js ever sets `game.sample`, so
+  // in a built site this is one property check per frame.
+  if (game.sample) {
+    const t3 = performance.now();
+    game.sample(now);
+    game.msTune += (performance.now() - t3 - game.msTune) * 0.05;
+  }
 
   requestAnimationFrame(frame);
 }

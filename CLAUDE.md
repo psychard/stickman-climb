@@ -19,6 +19,11 @@ of. See [Problems](#problems) and [Menu and difficulty](#menu-and-difficulty).
 
 ## Where things stand
 
+There is now a **live tuning rig**: sliders on a laptop at `/__tune` drive the game on
+a phone over the dev server's own websocket, with telemetry coming back the other way.
+It is dev-only by construction and contributes 0.2 kB to a build. See
+[Tuning it live](#tuning-it-live).
+
 Working and verified: draggable limbs with multitouch, reach limits with body
 lunge, anatomical pose limits, geometric load distribution, stamina with rest and
 recovery, falling, a balance limit once both hands are off the wall, scrolling
@@ -55,6 +60,8 @@ Standing decisions, so they don't get relitigated by accident:
 | **A wall is a short problem with a top**, not an endless climb: ~430u, ended by matching a finish hold with both hands. Six per level, in styles (traverse, foot match, reachy...), ticked off when topped. | Settled — replaced the endless wall |
 | **Two limbs may share a hold.** Always legal in the sim; now something the generator asks for, in the foot match and in every top-out. | Settled |
 | **The thirty problems are the day's**, seeded from the local date, and the ticks clear with them at each player's own midnight. What was topped on which day is kept. | Settled — replaced the fixed thirty |
+| **Feel constants get a slider; stability and generation constants get `--set`.** A laptop page at `/__tune` drives the phone live, but only for the 38 constants a hand can honestly judge. The ones whose failure mode is a limit cycle or an unclimbable wall reach you through the tool that can see them. | Settled — see [Tuning it live](#tuning-it-live) |
+| **The tuner reports what to change; it never writes `tuning.js`.** The measured numbers in that file's comments are most of its value, and a mechanical edit leaves them confidently wrong. | Settled — don't add a write endpoint |
 
 The brief in `docs/BRIEF.md` has been revised where playtesting proved it wrong;
 its Revisions section records what changed and why.
@@ -70,7 +77,23 @@ npm run ladder   # are the five levels actually five difficulties?
 npm run fuzz     # haul 3 limbs at once to absurd places; can the body be broken?
 npm run jitter   # does the body ever settle into a bouncing loop?
 npm run icon     # regenerate the home-screen icon and favicons (needs rsvg-convert)
+npm run tune:check  # does the tuner still describe tuning.js, and does its protocol hold?
 ```
+
+**Every tool except `icon` takes `--set PATH=VALUE` and `--preset file.json`**, so a
+value you liked on a phone can be measured before it lands — the tuner's `save preset`
+button writes exactly the file `--preset` reads. See
+[Tuning it live](#tuning-it-live). An overridden run prints a loud banner top and
+bottom, because this output gets pasted into `tuning.js` as the justification for a
+number and a `sim` run at `--set DRAG_PULL=3.0` must never read like a baseline.
+
+Both flags accept a space or an `=` (`--preset f.json` and `--preset=f.json`), and
+**a flag that names nothing is an error rather than a no-op**. That is not
+fastidiousness: `--preset` once matched only the `=` form, so the space form ran a
+clean baseline and said nothing about it — printing precisely the numbers you would
+then paste into `tuning.js` to justify a value it had never applied. Scan argv by
+index for the same reason; `argv.indexOf(arg)` finds the *first* match, which silently
+dropped the second of two space-form `--set` flags.
 
 The walls are reseeded from the date every day, so **which day a tool runs against is
 part of what it measures**. `verify` sweeps forward from today (`npm run verify -- 30`
@@ -346,11 +369,48 @@ install nudge is not.
 | `src/install.js` | should the menu nudge you to install it to your home screen? |
 | `src/update.js` | service worker registration, and "a new build is waiting" |
 | `src/main.js` | canvas sizing, safe-area insets, frame loop |
+| `src/overrides.js` | applying tuning overrides by dotted path; `LOCKED`; `--set` parsing |
+| `src/tune.js` | **dev only** — receives overrides, draws the badge, sends telemetry |
+| `tools/tune/` | the laptop tuner: dev-server plugin, page, schema, commit report |
 | `public/` | manifest and home-screen icons, copied verbatim to `dist/` |
 | `public/sw.js` | offline cache **template** — stamped into `dist/sw.js` at build time |
 
 Tuning constants live **only** in `src/tuning.js`. Don't inline magic numbers in
 the other modules; they get adjusted constantly and need to be in one place.
+`tools/tune/schema.js` classifies those constants but **stores no values**, which is
+what keeps it from being a second place a number lives.
+
+### Adding a constant to `tuning.js` means classifying it
+
+**`npm run tune:check` fails on any leaf of `T` it has never been told about**, so
+adding a constant without doing this breaks the check and takes `/__tune` down with
+it (the plugin serves a 503 rather than a tuner that misdescribes the file). That is
+deliberate — a classification file nobody is forced to update stops being true
+within a month. It is a one-line edit; the check tells you which list is missing it.
+
+Put the new path in `tools/tune/schema.js`, in exactly one of:
+
+- a **`GROUPS` entry** if a hand on a phone can honestly judge it — and then it also
+  needs a line in **`DESC`**, which the check enforces separately. `HAND_HANG_BIAS`
+  and `LOAD_STAND_SPAN` are the argument for that rule: a slider whose meaning you
+  can't read is one you tune by watching the figure twitch.
+- **`UNTUNED`**, with a one-word `why` and a note, if it isn't a slider. Most
+  constants land here. The existing reasons (`stability`, `generation`, `anatomy`,
+  `coupled`, `threshold`, `cosmetic`, `locked`) almost certainly already cover it.
+- **`LOCKED`** in `src/overrides.js`, with its reason, if overriding it at all is
+  unsafe rather than merely unwise — and add it to `UNTUNED` as `locked` too.
+
+Two things that follow, and are easy to get wrong:
+
+- **A new row in a table is routine; a new field on one is a new knob.** `UNTUNED`
+  patterns match `*` as exactly one segment, so `STYLES.*.rise` covers a seventh
+  style automatically while `STYLES.0.bounce` fails the check and demands a
+  decision. That asymmetry is the point — don't "fix" a failure by widening a
+  pattern to `STYLES.*.*`.
+- **A range is not a default.** If `0` to twice the committed value is the wrong
+  span, add the path to `UNIT` (it is a 0..1 fraction by meaning) or give `SPAN` a
+  *multiplier*. Writing an absolute bound is what would make the schema a second
+  source of truth for a number, which is the one thing it must never be.
 
 ## How the figure works
 
@@ -1049,6 +1109,197 @@ Two things follow from that:
   tested by overriding the probe's padding: given a 59pt top inset the HUD and the
   menu both move clear. It was only ever the number that was wrong.
 
+## Tuning it live
+
+Sliders on a laptop at **`/__tune`**, game untouched on the phone, values landing
+within a frame. `npm run dev`, `ngrok http 5173`, game on the phone, `/__tune` on the
+laptop — that is the whole setup.
+
+This exists because the constants that decide the prototype's one question are
+exactly the ones no headless tool can score. There is no `npm run` that tells you the
+camera sits too high. Editing a file, reloading, and re-forming an opinion about how
+something felt thirty seconds ago is a bad instrument for that, and worse when the
+file is on a laptop you have to look away from the phone to reach.
+
+**Three facts make it cheap, and one of them is luck.** `T` is a plain unfrozen
+object and *nothing captures its values at module scope* — all ~230 `T.` reads across
+`src/` happen inside function bodies at call time, so a write takes effect on the next
+frame with no refactoring. Vite's HMR websocket already carries custom events both
+ways and the phone is already on it through the same tunnel serving the page, so there
+is no second server and **no new dependency**. And `import.meta.env.PROD` was already
+the established gate for dev-only code.
+
+### The constants are not one kind of thing
+
+Which is the whole point, and the rig is built around it:
+
+| Class | Settled by | v1 |
+|---|---|---|
+| **Feel** — `CAM_*`, `GRAB_RADIUS`, `DANGLE_LERP`, `TOP_HOLD_TIME`, `DAMPING`… | a hand on a phone; nothing else can | **slider** (15) |
+| **Calibration** — `REST_STRAIN`, `W_*`, `LOAD_*`, `FLEX` | `measure`, against a measured distribution | **slider** (23) |
+| **Stability** — `DRAG_PULL`, `LUNGE_*`, `WEDGE_*`, `FOOT_PUSH_*` | `sim` / `jitter` / `fuzz` | `--set` only |
+| **Generation** — `QUALITY_*`, `REUSE*`, `LEVELS[].floor` | `ladder` + `verify` | `--set` only |
+| **Locked** — `SUB_DT`, `WALL_W`, `MAX_SUBSTEPS`, `REF_DAY`… | nothing; don't | refused |
+
+**Stability constants are deliberately not sliders.** Their failure mode is a 60Hz
+limit cycle or a 1-in-300 wreck, neither of which shows up in the thirty seconds you
+would spend judging one — and this repo already records two cases where the knob that
+killed a symptom made the mechanic worse. They reach you through `--set` on the tool
+that can actually see them. Try it: `npm run jitter -- --set DRAG_PULL=6.0` goes from
+0.2% of windows bouncing to 10.2% and fails, which is the argument in one command.
+
+**Generation constants are also baked**, so they would need a fresh
+`game.startProblem()` rather than a `game.restart()` (which only re-seats the figure
+on the existing wall). The `after` field in the schema is where that goes when they're
+exposed; every v1 constant is `after: 'none'`, which is why the line sits there.
+
+`LOCKED` lives in `src/overrides.js` with its reason attached, because it is a safety
+property of the simulation rather than rig metadata. `WALL_W` is on it for a reason
+worth writing down: **every measured number in `tuning.js` is denominated in world
+units**, so moving it invalidates the whole file at once.
+
+### Five things that are load-bearing
+
+- **The dev server owns the override set** — not the phone, not the tuner page,
+  because both reload. Vite's client calls `location.reload()` when the websocket
+  drops, so a phone screen-lock or a tunnel hiccup reloads the game mid-climb.
+  Resync is the common path, not an edge case. Killing the dev server is therefore a
+  full reset, and nothing is persisted on the device on purpose: an override set that
+  survived in `localStorage` would be a tuned session you could pick up tomorrow
+  without knowing it.
+- **`climb:apply` always carries the complete desired map, never a delta.** That one
+  convention settles reload, A/B switching, multiple phones and dropped messages at
+  once — the client diffs against what it applied and restores anything absent. It is
+  also the entire correctness question for A/B: inherit a key slot A set and you are
+  no longer comparing what the UI says you are. `npm run tune:check` asserts it.
+- **`main.js` reaches `src/tune.js` through a *dynamic* import inside an
+  `import.meta.env.DEV` branch.** A static top-level import would sit in the
+  production graph unconditionally, and `dist/sw.js` precaches `assets/*` — so a
+  leaked chunk would not merely ship, it would be *installed* onto a phone. The build
+  check is mechanical: `dist/assets` must hold exactly one file. Don't take the
+  dead-code elimination on trust; the whole rig is currently 0.2 kB of shipped bytes
+  (two `game.overlay?.()` call sites, a `game.tuned?.lines` spread, and the `sent`
+  guard) and it should stay that way.
+- **The badge and the overlay lines are drawn by `src/tune.js`, not `render.js`.**
+  `render.js` owns *where* (`game.overlay?.(ctx, view, …)`) and the rig owns *what*.
+  Written the other way round it cost ~1 kB of never-executed code in the shipped
+  bundle.
+- **`applyCliOverrides()` must be called ABOVE `const DAY = dayArg(...)`** in every
+  tool. All of them read `T.REF_DAY` at module scope, so an override applied after
+  that line silently does nothing to the day.
+
+### The tuner page cannot ship, for three independent reasons
+
+It is middleware-served from `tools/tune/` (`server.middlewares.use('/__tune')`
+returning `transformIndexHtml`, which is what injects `@vite/client` and so what gives
+the page an `import.meta.hot` to talk over). So: the plugin is `apply: 'serve'` and
+never runs during a build; the files are in `tools/`, so neither a build input nor in
+`public/`; and nothing in `index.html` references them.
+
+A root `tune.html` would rest on exactly one reason — "Vite's default build input is
+`index.html` only" — which is a default in someone else's package that a future
+`build.rollupOptions.input` silently revokes. That is the same class of trap as
+`cache: npm` "is not redundant" and `include-hidden-files` above.
+
+### The schema stores no values, and a check enforces it
+
+`tools/tune/schema.js` classifies all 224 leaves of `T` — 38 exposed, 186 in an
+`UNTUNED` list with a one-word reason each. It holds no defaults: slider ranges are
+*derived* from whatever `tuning.js` currently says (`UNIT` for the 0..1 fractions,
+`SPAN` for multipliers), so it cannot become a second source of truth for a number.
+That is the test for whether adding something here violates "every knob lives in
+`tuning.js`" — a domain bound is fine, a default is not. `DESC` passes the same test
+for the same reason: it says what a constant *is*, never what it is set to.
+
+`npm run tune:check` runs **both directions**, and the second is the one that rots:
+every schema path must exist in `T`, *and* every leaf in `T` must be accounted for.
+It also holds `DESC` to the exposed set in both directions, so a slider cannot ship
+without a line explaining it and a description cannot outlive its slider.
+Patterns use `*` for one segment, so a seventh style passes and a new *field* on a
+style fails — a new row in a table is routine, a new field is a new knob. The plugin
+runs the check at dev-server start and **serves `/__tune` a 503 if it fails**, so you
+find out the first moment it matters. It is deliberately *not* part of `npm run
+verify`: verify's job is proving walls climbable in front of a deploy, and drift in a
+file that isn't in the build is no reason to block shipping the game.
+
+See [Adding a constant to `tuning.js` means classifying
+it](#adding-a-constant-to-tuningjs-means-classifying-it) for what to do when the
+check fails on something you just added — which is the common case, not an error.
+
+**Every exposed knob carries a one-line description**, because the names do not
+carry themselves: `HAND_HANG_BIAS`, `LOAD_STAND_SPAN` and `BALANCE_MIN_SHARE` are
+not guessable from the identifier, and the pair `FLEX.ARM.straight` /
+`FLEX.ARM.folded` is meaningless unless you know both are fractions of max reach.
+`REST_STRAIN`'s line carries its measured percentiles inline, since that is the one
+knob whose current value means nothing without the distribution it is calibrated
+against — and the live one sits directly beneath it.
+
+### The strain distribution, and what it is not
+
+The tuner shows live **p25 / median / p90 of strain and the recovering fraction**
+right under the `REST_STRAIN` slider, from a per-frame histogram on the phone. That
+constant is calibrated against percentiles — you cannot feel a percentile, and a clean
+test stance scores 0.12 against a real median of 0.30, so tuning to whichever stance
+you happen to be standing in is the documented trap.
+
+**It is a different statistic from `npm run measure`**, and the UI says so. This one
+is time-weighted over frames of human play; `measure` reports the spread over discrete
+route stances driven by the auto-climber. The frame-weighted one is arguably closer to
+what pacing feels like and the repo has never had it — but it informs the slider, and
+`measure` still settles the committed value. The histogram is thrown away whenever a
+strain weight moves, because those samples measure a different model; the sample count
+is shown so you know whether to believe it yet.
+
+Telemetry costs 0.0002ms per frame between sends and 0.0185ms on a send, against a
+16.7ms budget — and **zero with no tuner open**, since the game sends nothing until a
+tuner's heartbeat tells it to. `hz 0` in the debug overlay is the first thing to check
+when a readout looks frozen: it distinguishes "nothing is being sent" from "what is
+being sent is wrong".
+
+### Landing a value: a report, never a write
+
+`commit…` produces the line to change, the line to change it to, and — the part that
+matters — **the comment block above it, flagged `NOW SUSPECT`**, plus every other
+mention of that constant in `tuning.js` *and* `CLAUDE.md`.
+
+It never writes a file, and that is a decision:
+
+- **The safe subset of a mechanical edit is almost empty.** The only rule that
+  reliably prevents a lying file is "refuse any key whose comment cites a number", and
+  that disqualifies nearly every constant worth tuning. Landing a new value under
+  prose reading *"Measured at 0.95: no bouncing left in `npm run jitter`"* is worse
+  than no edit: now the file is wrong, and committed.
+- **Writing `tuning.js` triggers a full reload**, so committing would interrupt the
+  session you were measuring in — and drop the climb.
+- **The dev server is routinely on a public ngrok tunnel.** A write endpoint is a
+  remote arbitrary-write primitive on a source file. Not building one is the cheapest
+  possible mitigation.
+
+The session log (`copy log`) pairs each `mark` with the value set *and* the telemetry
+sample at that moment, which is the raw material a rewritten comment actually needs.
+
+### Ticks are suppressed while tuned
+
+`topOut` writes no tick, and the badge says `NO TICKS`. This goes the other way from
+the `setDay` precedent, which *does* write real history — and the difference is
+whether the wall can be named. A `setDay` wall is reproducible from day + level +
+index, so its tick means something. A problem topped under a tripled `RECOVER_RATE` is
+reproducible from nothing stored, so the tick would be a claim about the real game
+that isn't true, in the one key that outlives a page load and that a streak or a
+calendar will be built from.
+
+### Odds and ends
+
+- `window.__installHint`-style forcing isn't needed: open `/__tune` and the rig is on.
+- Editing `src/tuning.js` by hand mid-session full-reloads the phone and re-bases every
+  override. That's correct, and the plugin's start-up banner says so.
+- A backgrounded tuner tab stops telemetry — browsers throttle its heartbeat past the
+  server's staleness window. That's the right outcome (you aren't looking at it), and
+  it beats immediately on becoming visible again.
+- `npm run icon` deliberately does **not** take `--set`. It is the one tool that writes
+  committed files, and an overridden icon is an artifact you could commit by mistake
+  rather than a measurement.
+
 ## Debugging
 
 `window.__game` is exposed in dev — inspect `__game.fig.hip`, `__game.stam.parts`,
@@ -1060,6 +1311,12 @@ the number keys jump to a level's first problem from anywhere.
 `__game.startProblem(level, index)` picks any of them from the console, but it needs
 two frames to build — and `requestAnimationFrame` throttles hard when the browser
 pane isn't focused, so give it seconds, not milliseconds.
+
+With the tuning rig open the overlay grows a `tune` block: the active slot, the
+revision the phone last applied, the telemetry rate, `msTune`, and which paths are
+currently held away from the file. `rev` is the one to read when a slider seems not to
+arrive — server on 12 and phone reporting 9 means a dropped message or a reloading
+device. See [Tuning it live](#tuning-it-live).
 
 Progress lives in `localStorage['climb.days.v1']`, keyed by day. `__game.days` is the
 live `Map` of day → tick Set; clear it and the key to start again:

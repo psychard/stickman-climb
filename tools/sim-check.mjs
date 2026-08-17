@@ -48,6 +48,11 @@ function stanceWith(fig, limb, hold) {
 // `--day=today` (or a specific one) runs it against a set nobody has tuned against,
 // which is the honest check on whether a number generalises. `verify` is the tool
 // that sweeps real days.
+import { applyCliOverrides, overrideFooter } from './overrides-cli.mjs';
+
+// MUST precede the DAY line below, which reads T at module scope.
+const OVERRIDES = applyCliOverrides();
+
 const DAY = dayArg(process.argv, T.REF_DAY);
 
 const step = (fig, stam, n) => {
@@ -339,4 +344,5 @@ console.log(
     ? `\nSimulated climbs OK -- ${allTopped}/${allProblems} problems topped out cleanly.`
     : `\n${bad}/${T.LEVELS.length} levels had problems.`,
 );
+overrideFooter(OVERRIDES);
 process.exit(bad === 0 ? 0 : 1);

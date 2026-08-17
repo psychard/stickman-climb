@@ -8,6 +8,10 @@ Thirty problems: five difficulties, six problems each, every one a short sequenc
 you can read from the ground. They come in styles -- a traverse, one that wants
 both feet on the same hold, a reachy one -- and they are ticked off when topped.
 
+**The thirty are the day's**, seeded from the local date, so everyone on the same
+calendar day climbs the same walls and tomorrow they are gone. The set turns over at
+your own midnight, and what you topped on which day is kept.
+
 The point of the prototype is to find out whether dragging limbs around a wall
 feels good. See [docs/BRIEF.md](docs/BRIEF.md) for scope and intent.
 
@@ -56,12 +60,121 @@ PNGs are committed so the build never has to).
 - **Top out by matching the finish hold with both hands** and holding it for a
   moment. The top is ringed and labelled; controlling it is the last move, the way
   it is in a real gym.
-- You fall if **all four limbs** come off the wall, if **stamina** hits zero, or if
-  you let go of both hands somewhere your feet can't hold you on their own.
+- You fall if **all four limbs** come off the wall, if **stamina** hits zero, if you
+  let go of both hands somewhere your feet can't hold you on their own, or if — with
+  both hands off — your weight stays out past your feet. With no hand on the wall you
+  are standing rather than hanging, so the base of support is drawn under your feet:
+  a solid bar you can stand anywhere on, and a ghosted extension you can only be out
+  on for a moment.
 - Stamina drains from bad holds, bent limbs, being off-balance, and weight on
   your arms — and it comes back on a straight-armed, balanced, footed rest.
 
-Tap `dbg` (or press `D`) for the strain breakdown and frame timings. `R` restarts.
+Tap `dbg` (or press `D`) for the strain breakdown and frame timings. `R` restarts the
+problem, `M` or `Escape` goes back to the menu, and the number keys jump to a
+level's first problem.
+
+### Offline
+
+Once loaded, the game needs the network for nothing: walls come from seeds and ticks
+live in `localStorage`. An installed copy plays with no signal at all, and a new set
+still arrives at midnight because the date comes off the device clock. When a new
+build is published the menu grows a band saying so — nothing reloads mid-climb.
+
+## Tuning it live
+
+Sliders on a laptop, game on a phone, values landing within a frame. This exists
+because the constants that decide whether the game feels good are exactly the ones no
+headless tool can score — there is no `npm run` that tells you the camera sits too
+high.
+
+### Setting it up
+
+```bash
+npm run dev
+ngrok http 5173
+```
+
+Open the ngrok URL on the phone, and **<http://localhost:5173/__tune>** on the laptop.
+That's the whole setup — the phone talks to the tuner over the dev server's own
+websocket, so there's no second server and nothing to install. It works on a LAN
+address too if you'd rather skip the tunnel.
+
+### What you get
+
+Each slider carries a line saying what it controls, since the names don't carry
+themselves. Move one and the phone changes on the next frame; the game grows a
+`TUNED A · 3 keys · rev 12` badge so a tuned session can never be mistaken for the
+real thing. `rev` is worth watching — if the tuner says 12 and the badge says 9, a
+message was dropped or the phone is reloading, and you should stop trusting what
+you're feeling.
+
+- **`A` / `B`** hold two independent sets, so you can flip between two candidates
+  instead of trying to remember how the last one felt. Switching resets anything the
+  other slot didn't set, so B never silently inherits A's values.
+- **`mark`** stamps a note against the current values *and* the live telemetry — the
+  raw material for the comment you'll eventually write. **`copy log`** takes the whole
+  session.
+- Under `REST_STRAIN` sits the **live p25 / median / p90 of strain** and the fraction
+  of frames that are recovering. That constant is calibrated against percentiles, and
+  a clean test stance scores 0.12 against a real median of 0.30 — so tuning it to
+  whichever stance you happen to be standing in is the classic mistake.
+- **Problems aren't ticked off while anything is overridden**, and the badge says
+  `NO TICKS`. A send under a tripled recovery rate isn't a send.
+
+Killing the dev server resets everything. Nothing is stored on the phone, so you can't
+accidentally pick up yesterday's half-tuned session.
+
+### Only 38 of the constants are sliders
+
+The rest reach you through `--set` on the tool that can actually see them, and that
+split is the point:
+
+| These | are settled by | because |
+|---|---|---|
+| camera, grab/snap radii, timings, damping | **a hand on a phone** | nothing else can |
+| `REST_STRAIN`, the strain weights, load and balance | **`npm run measure`** | they're calibrated against a distribution |
+| `DRAG_PULL`, `LUNGE_*`, `WEDGE_*`, `FOOT_PUSH_*` | **`sim` / `jitter` / `fuzz`** | the failure mode is a 60Hz limit cycle you can't feel in thirty seconds |
+| `QUALITY_*`, `REUSE*`, level floors | **`ladder` + `verify`** | they decide whether a wall is climbable at all |
+
+Try the argument for yourself: `npm run jitter -- --set DRAG_PULL=6.0` goes from 0.2%
+of windows bouncing to 10.2% and fails. Judged by hand for half a minute, that value
+feels *more* responsive.
+
+### When you find a better value
+
+**Nothing has been written to `src/tuning.js`.** Landing a value is a deliberate,
+separate step, and it goes like this:
+
+1. **Prove it headlessly first.** Press **`save preset`** to download the active slot,
+   then run the tool that owns that class of constant — the table above says which. A
+   value that feels good and moves `sim`'s plant rate from 94% to 72% is not a better
+   value.
+
+   ```bash
+   npm run sim -- --preset ~/Downloads/slot-A.json
+   ```
+
+   An overridden run prints a loud banner top and bottom, so its output can never be
+   mistaken for a baseline measurement.
+
+2. **Press `commit…`.** It gives you the exact source line, the replacement line, and
+   — the part that matters — **the comment block above it, flagged `NOW SUSPECT`**,
+   plus every other mention of that constant in `src/tuning.js` *and* `CLAUDE.md`.
+
+3. **Edit `tuning.js` by hand, and rewrite the comment.** Most constants in that file
+   sit under prose citing a measured number. Landing `0.31` under a comment reading
+   *"Measured at 0.26: about the best 35% of stances recover"* leaves the file
+   confidently wrong, which is worse than not changing it — the measured numbers are
+   most of that file's value. Use your `mark` notes and the fresh tool output.
+
+4. **Re-run what you invalidated** and paste the new numbers in. `measure` for a
+   strain term, `ladder` for anything generative (the table in `tuning.js` is its
+   output), `verify` and `sim` for anything the solver touches.
+
+The tuner deliberately has no write endpoint. Editing `tuning.js` would full-reload
+the phone and drop the climb you were measuring in, the dev server is routinely on a
+public tunnel, and no mechanical edit can keep the prose honest. `CLAUDE.md` has the
+longer argument.
 
 ## Checks
 
@@ -72,6 +185,13 @@ npm run jitter   # does the body ever settle into a bouncing loop?
 npm run fuzz     # haul three limbs at once to absurd places; can the body break?
 npm run ladder   # are the five difficulties actually five difficulties?
 npm run measure  # what the biophysics model does, in numbers
+```
+
+All of them take `--set PATH=VALUE` and `--preset file.json`, so a value can be
+measured before it's committed:
+
+```bash
+npm run jitter -- --set DRAG_PULL=6.0
 ```
 
 `verify` re-proves every stance of all thirty problems against the static solver,

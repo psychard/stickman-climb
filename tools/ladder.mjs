@@ -30,6 +30,11 @@ const SETTLE_STEPS = 18;
 // One pinned day, so the table in tuning.js is reproducible -- the walls are reseeded
 // from the date daily, and a ladder that reshuffles overnight can't justify a floor.
 // `--day=today` re-asks the question against a set nobody has tuned against.
+import { applyCliOverrides, overrideFooter } from './overrides-cli.mjs';
+
+// MUST precede the DAY line below, which reads T at module scope.
+const OVERRIDES = applyCliOverrides();
+
 const DAY = dayArg(process.argv, T.REF_DAY);
 
 const avg = (a) => a.reduce((x, y) => x + y, 0) / (a.length || 1);
@@ -168,3 +173,4 @@ for (let level = 0; level < T.LEVELS.length; level++) {
       `${runs.filter((r) => r.topped).length}/${runs.length}`,
   );
 }
+overrideFooter(OVERRIDES);

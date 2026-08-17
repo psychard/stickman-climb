@@ -336,6 +336,14 @@ function drawMenu(ctx, game) {
   else if (band === 'install') drawInstallHint(ctx, view);
 
   // ------------------------------------------------------------------ footer
+  // draw() early-returns for menu/building, so the dev overlay hook needs its own
+  // call on this path -- and this is the path that matters most if generation
+  // constants ever join the tuner's exposed set, since those change the walls on
+  // the menu itself. It takes the footer's slot rather than sharing it, and says
+  // so by returning true: the hint is permanent and long since read, and "you are
+  // not playing the real game" is the more urgent of the two.
+  if (game.overlay?.(ctx, view, 'menu')) return;
+
   ctx.textAlign = 'center';
   ctx.font = '10px ui-monospace, monospace';
   ctx.fillStyle = T.COL.textDim;
@@ -940,6 +948,13 @@ function drawHud(ctx, game) {
     ctx.textAlign = 'left';
   }
 
+  // Dev-only overlay hook. Nothing sets `game.overlay` in a built site -- the only
+  // thing that ever does is src/tune.js, behind a DEV-gated dynamic import -- so
+  // this is the whole cost of the tuning rig in the shipped renderer. Drawing the
+  // badge *here* rather than from the rig's own frame callback is what keeps this
+  // module the single authority on draw order.
+  game.overlay?.(ctx, view, 'hud');
+
   if (game.debug) {
     const lines = [
       `strain ${stam.smooth.toFixed(2)}  (rest ${T.REST_STRAIN})`,
@@ -964,6 +979,12 @@ function drawHud(ctx, game) {
       `safe ${view.safe.top.toFixed(0)}/${view.safe.right.toFixed(0)}/` +
         `${view.safe.bottom.toFixed(0)}/${view.safe.left.toFixed(0)}  ` +
         `${installed() ? 'installed' : 'tab'}`,
+      // Which constants the laptop is currently holding away from the file, and
+      // what the rig costs. Supplied ready-formatted by src/tune.js rather than
+      // built here, for the same reason the badge is: a wrong value is invisible
+      // everywhere except this overlay, but the code that describes it need not
+      // ship. Empty in a built site.
+      ...(game.tuned?.lines ?? []),
     ];
     ctx.font = '11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(0,0,0,0.45)';

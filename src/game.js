@@ -594,18 +594,31 @@ function matchingTop(game) {
 function topOut(game) {
   game.state = 'topped';
   game.fallTimer = 0;
-  // Filed against the wall's own day, not today's. They differ only when midnight
-  // passed mid-problem, and then the wall is the one that's right: this was a
-  // problem from yesterday's set and that is where it belongs in the record.
-  ticksFor(game, game.wall.day).add(problemKey(game.level, game.problem));
-  saveHistory(game);
+  // A send under live tuning overrides is not a send. `game.tuned` is set only by
+  // the dev-only rig in src/tune.js, so in a built game this is always false.
+  //
+  // This deliberately goes the other way from setDay, which *does* write real
+  // history -- and the difference is whether the wall can be named. A setDay wall
+  // is reproducible from day + level + index, so its tick means something. A
+  // problem topped under a tripled RECOVER_RATE is reproducible from nothing
+  // stored, so the tick would be a claim about the real game that isn't true --
+  // in the one key that outlives a page load, and that a streak or a calendar
+  // will be built from.
+  const sent = !game.tuned?.on;
+  if (sent) {
+    // Filed against the wall's own day, not today's. They differ only when midnight
+    // passed mid-problem, and then the wall is the one that's right: this was a
+    // problem from yesterday's set and that is where it belongs in the record.
+    ticksFor(game, game.wall.day).add(problemKey(game.level, game.problem));
+    saveHistory(game);
+  }
   game.last = {
     day: game.wall.day,
     level: game.level,
     problem: game.problem,
     reason: 'TOPPED',
     height: Math.round(game.bestHeight),
-    sent: true,
+    sent,
   };
   game.pointers.clear();
   for (const id of LIMB_IDS) game.fig.limbs[id].drag = null;

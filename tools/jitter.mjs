@@ -35,6 +35,11 @@ const WINDOW = 120; // substeps of "no input" we watch for a limit cycle -- 1s
 // Pinned to one day's walls (`--day=` to move it): the residual bounce rate is quoted
 // against a fixed set, so a regression has to be a regression rather than a different
 // Tuesday. Oscillation is a property of the solver, not of a particular wall.
+import { applyCliOverrides, overrideFooter } from './overrides-cli.mjs';
+
+// MUST precede the DAY line below, which reads T at module scope.
+const OVERRIDES = applyCliOverrides();
+
 const DAY = dayArg(process.argv, T.REF_DAY);
 
 /** Hip path length vs net displacement over `n` idle substeps. */
@@ -218,4 +223,5 @@ console.log(
       ? ' -- within budget.'
       : `\n${bad} scans over budget (${BOUNCE_BUDGET * 100}% held, 0 settled).`),
 );
+overrideFooter(OVERRIDES);
 process.exit(bad === 0 ? 0 : 1);
