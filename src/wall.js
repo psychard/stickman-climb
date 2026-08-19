@@ -17,6 +17,7 @@ import { T, difficultyAt, levelAt, lerp, clamp, clamp01 } from './tuning.js';
 import { makeRng, hashSeed } from './rng.js';
 import { today } from './day.js';
 import { stanceFeasible } from './body.js';
+import { stanceArmLoad } from './stamina.js';
 import { LIMB_IDS } from './body.js';
 
 const BAND = 200; // spatial index bucket height, world units
@@ -159,7 +160,7 @@ function buildProblem(level, index, day, seed, attempt) {
   // The route is the ordered list of moves, NOT the holds array: with reuse, one
   // hold serves several moves and a hold no longer belongs to a single limb.
   const route = [];
-  const stats = { rejected: 0, shrinks: 0, reused: 0, matches: 0 };
+  const stats = { rejected: 0, shrinks: 0, reused: 0, matches: 0, weighed: 0, armLoad: 0, scored: 0 };
   // Traverses pick a side, so the six problems on a level don't all lean the same
   // way. Drawn before anything else so it can't shift with generator retuning.
   const dir = rng() < 0.5 ? -1 : 1;
@@ -230,6 +231,10 @@ function buildProblem(level, index, day, seed, attempt) {
       rejected: stats.rejected,
       shrinks: stats.shrinks,
       matches: stats.matches,
+      // mean bodyweight the route's own stances put on the arms, 0..1 -- the
+      // thing the walk is now choosing for. See stanceArmLoad.
+      armLoad: stats.scored ? stats.armLoad / stats.scored : 0,
+      weighed: stats.scored ? stats.weighed / stats.scored : 0,
       rise: startY - (finish ? finish.y : topY),
       // how far across the wall the ROUTE travels, which is what a traverse is
       span:
@@ -292,6 +297,14 @@ function advance(ctx, step) {
       const dist = baseDist * Math.pow(0.72, shrink);
       if (shrink > 0) stats.shrinks++;
 
+      // Weigh several candidates that all solve and keep the one that stands on
+      // its feet, rather than committing to the first that merely holds. The
+      // walk used to take first-feasible, and a stance with the feet dangling
+      // uselessly beneath the body is entirely feasible -- which is how routes
+      // came out averaging 29% of bodyweight on the arms at level 1 and 43% at
+      // level 5, with almost nothing on them a player could rest on.
+      let best = null;
+      let weighed = 0;
       for (let attempt = 0; attempt < T.GEN_CANDIDATES; attempt++) {
         const dx = bias + rng.range(-T.MOVE_SPREAD, T.MOVE_SPREAD);
         const dy = -rng.range(dist * 0.45, dist * 1.1);
@@ -302,19 +315,30 @@ function advance(ctx, step) {
           stats.rejected++;
           continue;
         }
-        if (!stanceFeasible({ ...stance, [id]: cand })) {
+        const arms = stanceArmLoad({ ...stance, [id]: cand });
+        if (arms === null) {
           stats.rejected++;
           continue;
         }
-
+        if (!best || arms < best.arms) best = { cand, arms };
+        // Stop the moment a stance is genuinely good; otherwise keep looking
+        // until STANCE_WEIGH of them have been seen and take the best. Without
+        // the early exit every move pays the full weighing cost on the easy
+        // levels, where the first candidate is usually already fine.
+        if (arms <= T.STANCE_ARM_TARGET) break;
+        if (++weighed >= T.STANCE_WEIGH) break;
+      }
+      if (best) {
+        stats.weighed += weighed;
+        stats.armLoad += best.arms;
+        stats.scored++;
         const q = clamp01(
           lerp(T.QUALITY_ROUTE.easy, T.QUALITY_ROUTE.hard, diff) +
             rng.range(-T.QUALITY_JITTER, T.QUALITY_JITTER),
         );
-        placed = makeHold(cand.x, cand.y, q, true);
+        placed = makeHold(best.cand.x, best.cand.y, q, true);
         placedId = id;
         isNew = true;
-        break;
       }
     }
     if (placed) break;
@@ -427,10 +451,17 @@ function pickReusable(holds, stance, id, cur, dist, bias) {
     near.push({ h, d: Math.hypot(h.x - ideal.x, h.y - ideal.y) });
   }
   near.sort((a, b) => a.d - b.d);
+  // Weighed by arm load like a fresh candidate is, for the same reason: the
+  // nearest hold to the ideal move is not necessarily the one you can stand on,
+  // and reuse is a quarter of all moves at the top of the ladder.
+  let best = null;
   for (const { h } of near.slice(0, T.REUSE_TRIES)) {
-    if (stanceFeasible({ ...stance, [id]: h })) return h;
+    const arms = stanceArmLoad({ ...stance, [id]: h });
+    if (arms === null) continue;
+    if (!best || arms < best.arms) best = { h, arms };
+    if (arms <= T.STANCE_ARM_TARGET) break;
   }
-  return null;
+  return best ? best.h : null;
 }
 
 /**

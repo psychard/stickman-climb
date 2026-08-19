@@ -27,6 +27,23 @@ import { createStamina, updateStamina, computeStrain } from '../src/stamina.js';
 const DRAG_STEPS = 22; // same drag/settle cadence as tools/sim-check.mjs
 const SETTLE_STEPS = 18;
 
+/**
+ * Extra seconds a HUMAN spends on a move that the auto-climber does not.
+ *
+ * The cadence above is 40 substeps, i.e. 0.33s a move, and for most of this
+ * prototype's life every stamina constant was calibrated against it without
+ * anyone choosing to. A person reading a sequence off a phone takes something
+ * like 1.5s longer than that per move -- and that 5.5x difference was hiding the
+ * whole pacing problem. At 0.33s/move every level topped with 35-90% of the bar
+ * left; at 1.83s/move levels 3, 4 and 5 were 0/6 EVEN PLAYED PERFECTLY, sitting
+ * at every recovering stance until full. Level 5 pumped out a third of the way up.
+ *
+ * So `human` is the column to read when you touch REST_STRAIN, DRAIN_RATE or any
+ * strain weight. `climbed` cannot see this: it is the same robot whose pace made
+ * the numbers look fine.
+ */
+const HUMAN_DWELL = 1.5;
+
 // One pinned day, so the table in tuning.js is reproducible -- the walls are reseeded
 // from the date daily, and a ladder that reshuffles overnight can't justify a floor.
 // `--day=today` re-asks the question against a set nobody has tuned against.
@@ -69,7 +86,15 @@ function stanceChoices(wall, stance) {
   return { moves, stuck };
 }
 
-function climb(index, level) {
+/**
+ * Replay one problem's proven route through the live solver.
+ *
+ * `dwell` is thinking time added to every move. `deep` runs the choice sweep,
+ * which is a full feasibility solve per limb per stance and is most of the cost
+ * of this tool -- the human-paced pass only needs the stamina outcome, and it is
+ * climbing the very same wall.
+ */
+function climb(index, level, dwell = 0, deep = true) {
   const wall = generateProblem(level, index, DAY);
   const fig = createFigure(wall.start);
   const stam = createStamina();
@@ -107,7 +132,7 @@ function climb(index, level) {
     }
     // resync to the route on a miss, same reasoning as sim-check
     if (limb.hold !== target) limb.hold = target;
-    st(SETTLE_STEPS);
+    st(SETTLE_STEPS + Math.round(dwell * 120));
     strains.push(computeStrain(fig).total);
     moves++;
     if (stam.value <= 0) {
@@ -122,7 +147,7 @@ function climb(index, level) {
 
   // How much choice the wall offers, sampled over the stretch a real attempt
   // sees. Every stance is a full feasibility sweep, so sample sparsely.
-  const stances = routeStances(wall).slice(0, 120);
+  const stances = deep ? routeStances(wall).slice(0, 120) : [];
   const choices = [];
   const stucks = [];
   for (let i = 0; i < stances.length; i += 8) {
@@ -143,6 +168,8 @@ function climb(index, level) {
     stuck: avg(stucks),
     rests: strains.filter((v) => v < T.REST_STRAIN).length / Math.max(1, strains.length),
     strain: avg(strains),
+    armLoad: wall.stats.armLoad,
+    left: stam.value,
     height: -fig.hip.y,
     moves,
     pumped,
@@ -153,11 +180,20 @@ function climb(index, level) {
 console.log(`rest threshold ${T.REST_STRAIN}, all ${T.PROBLEMS_PER_LEVEL} problems per level`);
 console.log('`choices` is legal moves available per stance, `stuck` limbs with none.\n');
 console.log(
-  'lvl name      floor  holds/100u  hold q  move  reuse  choices  stuck  rests  climbed  moves  topped',
+  '`human` is the same route at a human pace -- ' +
+    `${(0.33 + HUMAN_DWELL).toFixed(2)}s a move rather than 0.33s -- and is the ` +
+    'column to read when you\ntouch a stamina constant. `arms` is the bodyweight ' +
+    "the route's own stances leave on them.\n",
+);
+console.log(
+  'lvl name      floor  holds/100u  hold q  move  reuse  choices  stuck  arms  rests  climbed  moves  topped   human',
 );
 for (let level = 0; level < T.LEVELS.length; level++) {
   const lvl = T.LEVELS[level];
   const runs = Array.from({ length: T.PROBLEMS_PER_LEVEL }, (_, i) => climb(i, level));
+  const paced = Array.from({ length: T.PROBLEMS_PER_LEVEL }, (_, i) =>
+    climb(i, level, HUMAN_DWELL, false),
+  );
   const col = (f, d = 2) => avg(runs.map(f)).toFixed(d);
   console.log(
     ` ${level + 1}  ${lvl.name.padEnd(9)} ${lvl.floor.toFixed(2)}  ` +
@@ -167,10 +203,13 @@ for (let level = 0; level < T.LEVELS.length; level++) {
       `${(100 * avg(runs.map((r) => r.reuse))).toFixed(0).padStart(4)}%  ` +
       `${col((r) => r.choices, 1).padStart(7)}  ` +
       `${col((r) => r.stuck, 2).padStart(5)}  ` +
+      `${(100 * avg(runs.map((r) => r.armLoad))).toFixed(0).padStart(3)}%  ` +
       `${(100 * avg(runs.map((r) => r.rests))).toFixed(0).padStart(4)}%  ` +
       `${col((r) => r.height, 0).padStart(6)}u  ` +
       `${col((r) => r.moves, 0).padStart(5)}  ` +
-      `${runs.filter((r) => r.topped).length}/${runs.length}`,
+      `${runs.filter((r) => r.topped).length}/${runs.length}` +
+      `   ${paced.filter((r) => r.topped).length}/${paced.length}, ` +
+      `${(100 * avg(paced.map((r) => r.left))).toFixed(0).padStart(3)}% left`,
   );
 }
 overrideFooter(OVERRIDES);

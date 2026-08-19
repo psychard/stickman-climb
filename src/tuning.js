@@ -288,14 +288,26 @@ export const T = {
   // ---------------------------------------------------------------- stamina ---
   // Strain is a single 0..~2 scalar built from three signals. Below REST_STRAIN
   // you recover; above it you drain. That threshold is the whole pacing knob.
-  W_HOLD: 0.55,
+  // Lowered 0.55 -> 0.35. Measured over every route stance of all thirty problems,
+  // this term alone was 0.266 of the 0.31 that separated level 1's median strain
+  // from level 5's -- 86% of the entire difficulty ladder was "the holds bleed you",
+  // and the levels barely differed in pose or in what they asked you to work out.
+  // It is a well-behaved knob for exactly that complaint because it only bites where
+  // holds are bad: level 1's are jugs, so (1-q)^HOLD_EXP is ~0 and its median moved
+  // 0.01, while level 5's moved 0.07. The difficulty it gives back is carried by
+  // `choices` (11 legal moves a stance on level 1, 4.5 on level 5) rather than by
+  // attrition -- see the ladder table below.
+  W_HOLD: 0.35,
   W_FLEX: 0.4,
   W_BALANCE: 0.45,
   W_ARMLOAD: 0.45, // cost of simply having weight on your arms
   // Calibrated against the measured spread of real problem stances on level 1, which
-  // on REF_DAY runs p25 0.23 / median 0.30 / p90 0.44. Roughly the best 35% of
-  // positions on the easiest level offer a rest, falling to 5% on the hardest -- see
-  // `npm run ladder`.
+  // on REF_DAY runs p25 0.19 / median 0.28 / p90 0.37. Roughly the best 50% of
+  // positions on the easiest level offer a rest, falling to 13% on the hardest -- see
+  // `npm run ladder`. That fraction used to be 35% -> 5%, and 5% is the number that
+  // made the hard levels a race: there was nowhere to stop, so the only strategy the
+  // wall rewarded was moving fast, which is the thing a human finds HARDER than the
+  // auto-climber does and not easier.
   //
   // With the walls reseeded daily that fraction is a distribution, not a number: it
   // runs 26-45% on level 1 across a 24-day sample, which is why REF_DAY is pinned to
@@ -311,9 +323,23 @@ export const T = {
   // SOLVER change moves this too: the oscillation fix left the figure standing a
   // little lower (35% of bodyweight on the arms, up from 29%), which pushed every
   // stance's strain up and would have quietly cost you a chunk of rest fraction.
-  REST_STRAIN: 0.26,
+  // A GENERATOR change moves it just as hard: STANCE_ARM_TARGET took the mean arm
+  // load down and every percentile with it.
+  REST_STRAIN: 0.28,
 
-  DRAIN_RATE: 0.16, // stamina/sec per unit of net strain
+  // Both of the numbers below are calibrated at a HUMAN pace -- 1.83 seconds per
+  // move -- and were previously calibrated, without anyone deciding to, against the
+  // auto-climber's 0.33s. That is a 5.5x difference in how long you spend on the
+  // wall, and it hid the whole problem: at 0.33s/move every level topped with 35-90%
+  // of the bar left, while at 1.83s/move levels 3, 4 and 5 were 0/6 EVEN PLAYED
+  // PERFECTLY (sitting at every recovering stance until full). Level 5 pumped out at
+  // move 10-14 of a 25-43 move problem, about a third of the way up, so the only
+  // strategy the wall rewarded was going fast -- which is the one thing a game asks
+  // of a human that a headless harness is unaffected by.
+  //
+  // `npm run ladder` now reports a `human` column for exactly this reason. Read it,
+  // not just `climbed`, when you touch anything here.
+  DRAIN_RATE: 0.1, // stamina/sec per unit of net strain
   RECOVER_RATE: 0.5, // stamina/sec per unit of net (negative) strain
   STAMINA_SMOOTH: 6, // low-pass on strain so it doesn't flicker while dragging
 
@@ -332,6 +358,17 @@ export const T = {
   FLEX_EXP: 1.6,
 
   FOOT_STRAIN_MULT: 0.4, // legs are much stronger than arms
+  // ...but that discount is muscular, and the `hold` term is not. With no hand on
+  // the wall the footholds are the only thing keeping you on, so they cost full
+  // price. Without this, dropping BOTH hands was cheaper than climbing at every
+  // level and on essentially every stance -- feet alone solve on 99-100% of route
+  // stances and settle in balance -- which halved the drain rate on level 5 and made
+  // letting go of the wall the dominant strategy. No slider could fix it: even with
+  // W_ARMLOAD and HAND_HANG_BIAS both at zero, hands-off still won 0.47 to 0.44,
+  // because the terms that vanish when the last hand comes off are exactly the ones
+  // a weight scales. It rides on hold quality, so a no-hands stance on level 1 jugs
+  // is still the genuine rest it should be and one on level 5 crimps is not.
+  NOHANDS_FOOT_GRIP: 1.0,
 
   // Load distribution. Each contact's share of bodyweight comes from how well it
   // opposes gravity and how close the centre of mass sits to it, rather than
@@ -399,6 +436,22 @@ export const T = {
   // units out, so this only has to absorb solver noise.
   GEN_TOLERANCE: 0.6, // world units of constraint violation still called "OK"
 
+  // A candidate stance has to be HOLDABLE (GEN_TOLERANCE, above) and the walk now
+  // also asks whether it is GOOD -- how much of your bodyweight it leaves on your
+  // arms. First-feasible was the rule for most of this prototype's life, and a
+  // stance with the feet dangling uselessly under the body is perfectly feasible:
+  // measured 29% of bodyweight on the arms at level 1 and 43% at level 5, with the
+  // knock-on that hard problems had essentially nothing on them to rest on. At a
+  // human 1.83s per move levels 3, 4 and 5 were 0/6 even played perfectly.
+  //
+  // Arm load and NOT strain is the whole trick. Strain contains hold quality, which
+  // is the difficulty ramp itself, so a generator preferring low strain would refuse
+  // to build a hard level. Arm load is pure geometry -- are your feet under you --
+  // so it separates technique from difficulty. See stanceArmLoad in stamina.js.
+  STANCE_ARM_TARGET: 0.24, // arm share good enough to stop looking (floor is
+  // HAND_HANG_BIAS, 0.20, so this is "feet nearly perfect")
+  STANCE_WEIGH: 5, // ...otherwise weigh this many holdable candidates, best wins
+
   // Move distance and hold quality both ramp with height.
   DIFF_FULL_HEIGHT: 5000, // height at which difficulty reaches 1.0
 
@@ -411,20 +464,34 @@ export const T = {
   // The floors are spaced on measured results, not by eye. `npm run ladder`
   // prints this table, measured on REF_DAY's thirty problems:
   //
-  //   lvl  floor  holds/100u  hold q  move  reuse  choices  stuck  rests  topped
-  //    1    0.00     12.3       0.91  51.2    1%     11.0    0.21    37%    6/6
-  //    2    0.20     10.2       0.77  54.9    6%      8.0    0.57    19%    6/6
-  //    3    0.45      8.7       0.60  57.7   11%      8.2    0.38    13%    6/6
-  //    4    0.70      7.2       0.46  62.6   18%      6.5    0.69     4%    5/6
-  //    5    1.00      6.0       0.29  69.3   24%      4.7    0.97     5%    5/6
+  //   lvl  floor  holds/100u  hold q  move  reuse  choices  stuck  arms  rests  topped   human
+  //    1    0.00     12.2       0.90  49.6    2%      9.7    0.40   21%   49%    6/6   6/6, 98% left
+  //    2    0.20     10.5       0.77  54.6    7%      9.5    0.28   21%   39%    6/6   6/6, 72% left
+  //    3    0.45      9.4       0.61  54.9   12%      8.0    0.36   21%   19%    6/6   5/6, 30% left
+  //    4    0.70      7.9       0.45  60.9   17%      6.2    0.58   22%   14%    6/6   5/6, 23% left
+  //    5    1.00      6.0       0.29  66.1   26%      4.5    0.88   22%   13%    6/6   2/6, 11% left
   //
   // `choices` is how many legal moves a stance offers and `stuck` how many of the
   // four limbs have none. Level 5 averages nearly one limb with nowhere to go,
   // which is the point: you have to work out which limb can move, and in what
-  // order. Note the auto-climber never rests deliberately, so a human gets
-  // further -- these are for spacing the rungs, not for predicting scores. The
-  // `climbed` column the table used to carry is gone: every problem is about the
-  // same height now, so it is flat by construction.
+  // order. The `climbed` column the table used to carry is gone: every problem is
+  // about the same height now, so it is flat by construction.
+  //
+  // **`human` is the column that spaces the top of the ladder, and `topped` is not.**
+  // `topped` is the auto-climber at 0.33s a move, and it is 6/6 on every rung -- it
+  // says nothing at all about difficulty any more. `human` replays the identical
+  // route at 1.83s a move, which is what a person reading a sequence off a phone
+  // actually takes, and it falls 6/6 with the bar untouched to 2/6 with 11% left.
+  // Calibrating stamina against `topped` is how the hard levels became a race that
+  // could not be won: measured, levels 3-5 were 0/6 at a human pace even played
+  // perfectly, resting at every recovering stance until full.
+  //
+  // `arms` is bodyweight the route's own stances leave on the arms. It reads 21-22%
+  // against a floor of HAND_HANG_BIAS (20%) because the walk now weighs candidates
+  // by it; before STANCE_ARM_TARGET it ran 29% on level 1 and 43% on level 5. Note
+  // it is FLAT across the ladder now, so a hard level is sparser and worse held but
+  // not more awkward -- ramping the target off difficultyAt would give that axis
+  // back, and has not been tried.
   //
   // These are ONE DAY's walls. The set is reseeded from the date daily, so each
   // column is a sample and not a constant -- level 1's rest fraction alone runs

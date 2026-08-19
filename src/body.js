@@ -1099,17 +1099,28 @@ export function stanceSolvable(pts) {
   return solveStatic(pts).violation <= T.PLANT_MAX_VIOLATION;
 }
 
-export function stanceFeasible(pts) {
-  // no crossed limbs, and hands must stay above feet -- geometrically possible
-  // stances that read as absurd are still rejected
+/**
+ * The generator's taste, without the solve: no crossed limbs, and hands stay
+ * above feet. Geometrically possible stances that read as absurd are rejected
+ * here rather than by the solver, which would happily hold them.
+ *
+ * Split out of `stanceFeasible` so a caller that wants to *weigh* a stance can
+ * pay for the solve exactly once -- see `stanceArmLoad` in stamina.js. The
+ * generator asks both questions about every candidate now, and solveStatic is
+ * by far the most expensive thing generation does.
+ */
+export function stanceShapeOk(pts) {
   if (pts.LH && pts.RH && pts.LH.x > pts.RH.x + T.SHOULDER_HALF) return false;
   if (pts.LF && pts.RF && pts.LF.x > pts.RF.x + T.HIP_HALF) return false;
   const lowHand = Math.max(pts.LH?.y ?? -Infinity, pts.RH?.y ?? -Infinity);
   const highFoot = Math.min(pts.LF?.y ?? Infinity, pts.RF?.y ?? Infinity);
   if (lowHand > highFoot - T.TORSO_LEN * 0.35) return false;
+  return true;
+}
 
-  const { violation } = solveStatic(pts);
-  return violation <= T.GEN_TOLERANCE;
+export function stanceFeasible(pts) {
+  if (!stanceShapeOk(pts)) return false;
+  return solveStatic(pts).violation <= T.GEN_TOLERANCE;
 }
 
 // --------------------------------------------------------------------------

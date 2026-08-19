@@ -72,6 +72,7 @@ export const GROUPS = [
       'HOLD_EXP',
       'FLEX_EXP',
       'FOOT_STRAIN_MULT',
+      'NOHANDS_FOOT_GRIP',
       'FLEX.ARM.straight',
       'FLEX.ARM.folded',
       'FLEX.LEG.straight',
@@ -163,6 +164,8 @@ export const DESC = {
   HOLD_EXP: 'Curve on hold badness. Higher makes the very worst holds bite disproportionately.',
   FLEX_EXP: 'Curve on limb bend. Higher makes a deep fold disproportionately expensive.',
   FOOT_STRAIN_MULT: 'How much cheaper a leg is than an arm. Legs are much stronger.',
+  NOHANDS_FOOT_GRIP:
+    'What a foothold costs when both hands are off the wall and it is all that is keeping you on. At FOOT_STRAIN_MULT, letting go is a free rest.',
   'FLEX.ARM.straight':
     'Arm length counted as straight and therefore free, as a fraction of max reach.',
   'FLEX.ARM.folded': 'Arm length counted as fully folded, as a fraction of max reach.',
@@ -269,6 +272,8 @@ export const UNTUNED = [
       'GEN_CANDIDATES',
       'GEN_SOLVE_ITERS',
       'GEN_TOLERANCE',
+      'STANCE_ARM_TARGET',
+      'STANCE_WEIGH',
       'DIFF_FULL_HEIGHT',
       'MOVE_DIST.*',
       'MOVE_SPREAD',

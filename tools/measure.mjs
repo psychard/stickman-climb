@@ -128,8 +128,13 @@ console.log('\n=== strain over real route stances (what REST_STRAIN calibrates t
     `flex ${(T.W_FLEX * agg.flex / n).toFixed(3)}   ` +
     `balance ${(T.W_BALANCE * agg.balance / n).toFixed(3)}   ` +
     `arms ${(T.W_ARMLOAD * agg.armLoad / n).toFixed(3)}`);
+  // This used to read "the generator gap: good stances would be far lower", and it
+  // was right -- the walk took the first stance that merely held, so routes averaged
+  // 29% here on level 1 and 43% on level 5. The walk now weighs candidates by this
+  // number (STANCE_ARM_TARGET), and the floor is HAND_HANG_BIAS, so anything near
+  // 20% means the generator is finding stances you can genuinely stand up in.
   console.log(`  mean bodyweight on the arms: ${(100 * agg.armLoad / n).toFixed(0)}%` +
-    '   <- the generator gap: good stances would be far lower');
+    `   <- floor is HAND_HANG_BIAS, ${(100 * T.HAND_HANG_BIAS).toFixed(0)}%`);
 }
 
 // -------------------------------------------------------- 3. reach envelope --

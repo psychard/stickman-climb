@@ -29,7 +29,16 @@
  */
 
 import { T, clamp01 } from './tuning.js';
-import { plantedLimbs, centerOfMass, extensionOf, anchorOf } from './body.js';
+import {
+  plantedLimbs,
+  centerOfMass,
+  extensionOf,
+  anchorOf,
+  solveStatic,
+  stanceShapeOk,
+  LIMB_DEFS,
+  LIMB_IDS,
+} from './body.js';
 
 export function createStamina() {
   return {
@@ -101,6 +110,51 @@ function loadShares(fig, planted, com) {
   return out;
 }
 
+/**
+ * How much of your bodyweight a stance would put on your arms, 0..1 -- or null if
+ * no body can hold it at all.
+ *
+ * This is the generator's measure of whether a stance is GOOD, next to
+ * `stanceFeasible`'s measure of whether it is possible. For most of this
+ * prototype's life only the second question was asked, and the answer showed:
+ * the routes averaged 29% of bodyweight on the arms at level 1 and 43% at level
+ * 5, because a stance with your feet dangling uselessly beneath you is perfectly
+ * feasible and got committed as readily as a good one.
+ *
+ * ARM LOAD AND NOT STRAIN, deliberately. Strain includes hold quality, which IS
+ * the difficulty ramp -- a generator that preferred low-strain stances would
+ * quietly refuse to build a hard level, since the only way to lower that term is
+ * to place better holds. Arm load is pure geometry: are your feet under you.
+ * So it measures technique and leaves difficulty entirely alone.
+ *
+ * It lives here rather than in wall.js or body.js because the load model is
+ * here, and a second copy of "which contact carries what" is exactly the kind of
+ * duplicate source of truth this repo keeps stamping out.
+ */
+export function stanceArmLoad(pts) {
+  if (!stanceShapeOk(pts)) return null;
+  const solved = solveStatic(pts);
+  if (solved.violation > T.GEN_TOLERANCE) return null;
+
+  // A figure-shaped view of the solved stance, enough for the load model. `pos`
+  // is the hold itself: nothing is dangling or mid-drag in a stance the
+  // generator is weighing, so endpoint and hold coincide.
+  const limbs = {};
+  for (const id of LIMB_IDS) {
+    limbs[id] = { ...LIMB_DEFS[id], id, hold: pts[id] || null, pos: pts[id] || solved.hip, drag: null };
+  }
+  const fig = { hip: solved.hip, chest: solved.chest, limbs };
+
+  const planted = plantedLimbs(fig);
+  if (!planted.length) return null;
+  const shares = loadShares(fig, planted, centerOfMass(fig));
+  let arms = 0;
+  for (let i = 0; i < planted.length; i++) {
+    if (planted[i].kind === 'hand') arms += shares[i];
+  }
+  return arms;
+}
+
 /** 0 when the limb is straight, 1 when fully folded. */
 function flexionCost(fig, limb) {
   const curve = limb.kind === 'hand' ? T.FLEX.ARM : T.FLEX.LEG;
@@ -163,13 +217,23 @@ export function computeStrain(fig) {
   const com = centerOfMass(fig);
   const shares = loadShares(fig, planted, com);
 
+  // WITH NO HAND ON THE WALL A FOOTHOLD IS NOT A DISCOUNT. FOOT_STRAIN_MULT says
+  // legs are stronger than arms, which is true of the muscular cost and stays true
+  // here -- but the `hold` term is not muscular, it is the cost of staying on a
+  // poor edge, and with your hands on the wall you can be sloppy about that because
+  // your hands keep you in contact. Let both hands go and that edge is the only
+  // thing between you and the ground, so it costs what it costs. See
+  // NOHANDS_FOOT_GRIP: this is the whole reason letting go is no longer a free rest.
+  const handsOn = planted.some((l) => l.kind === 'hand');
+
   for (let i = 0; i < planted.length; i++) {
     const limb = planted[i];
     const share = shares[i];
     const strength = limb.kind === 'foot' ? T.FOOT_STRAIN_MULT : 1;
+    const grip = limb.kind === 'foot' && !handsOn ? T.NOHANDS_FOOT_GRIP : strength;
     load[limb.id] = share;
 
-    parts.hold += share * strength * Math.pow(1 - limb.hold.q, T.HOLD_EXP);
+    parts.hold += share * grip * Math.pow(1 - limb.hold.q, T.HOLD_EXP);
     parts.flex += share * strength * flexionCost(fig, limb);
     // Arms tire from carrying weight at all, regardless of how good the hold
     // is. Without this a dead hang off two jugs scores as a perfect rest, when

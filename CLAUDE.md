@@ -33,15 +33,15 @@ ticks that reset each midnight and are kept per day, and reach rings that run th
 real grab rather than an approximation of it. Frame cost ~0.3ms of a 16.7ms
 budget, plus up to ~1.2ms on the one frame a drag starts.
 
-`sim` tops out all thirty problems cleanly at a 92–96% per-move plant rate,
+`sim` tops out all thirty problems cleanly at a 93–98% per-move plant rate,
 `fuzz` — which hauls three limbs at once to arbitrary points — leaves a settled
-violation in 0.94% of runs, and `jitter` finds a visible limit cycle in 0.2% of
-the windows it watches — down from 11.3%, with settled stances now clean. All three
-were comprehensively red before the solver passes described in
+violation in 1.0% of runs, and `jitter` finds a visible limit cycle in 0.5% of
+the windows it watches — down from 11.3%, with settled stances still exactly clean.
+All three were comprehensively red before the solver passes described in
 [Keeping the body physical](#keeping-the-body-physical) and
 [Three oscillators](#three-oscillators).
 
-That 0.94% is a **known residual with its own section** — see [What fuzz still
+That 1.0% is a **known residual with its own section** — see [What fuzz still
 leaves](#what-fuzz-still-leaves). It used to be quoted here as "2 runs out of 300",
 which was REF_DAY's luck: the rate runs 2–11 per 500 depending on the day's walls,
 and `fuzz` exited non-zero at its own baseline, so it was permanently red and could
@@ -69,6 +69,9 @@ Standing decisions, so they don't get relitigated by accident:
 | **Feel constants get a slider; stability and generation constants get `--set`.** A laptop page at `/__tune` drives the phone live, but only for the 38 constants a hand can honestly judge. The ones whose failure mode is a limit cycle or an unclimbable wall reach you through the tool that can see them. | Settled — see [Tuning it live](#tuning-it-live) |
 | **The tuner reports what to change; it never writes `tuning.js`.** The measured numbers in that file's comments are most of its value, and a mechanical edit leaves them confidently wrong. | Settled — don't add a write endpoint |
 | **`fuzz` has a budget rather than a clean bill.** ~1% of adversarial runs settle with a limb outside its cone, on stances the generator would never build. The gate is a rate, so a regression is visible; the residual is described rather than hidden. | Tolerated, not settled — the fix is in `stanceSolvable`, see [What fuzz still leaves](#what-fuzz-still-leaves) |
+| **The generator prefers stances you can stand up in.** The walk weighs candidates by arm load and keeps the best, rather than committing to the first that merely holds. Arm load and *not* strain, so difficulty is untouched. | Settled — replaced first-feasible |
+| **Letting go of both hands is not a free rest.** With no hand on the wall the footholds lose their strength discount on hold quality, because they are the only thing keeping you on. It rides on hold quality, so a no-hands stance on level 1 jugs still is a rest and one on level 5 crimps is not. | Settled — replaced a dominant strategy |
+| **Stamina is calibrated at a human pace, not the harness's.** 1.83s a move, not the auto-climber's 0.33s. `ladder`'s `human` column is the gate; `topped` is 6/6 on every rung and says nothing. | Settled — see [Stamina and load](#stamina-and-load) |
 | **Path dependence is a feature, and only its extreme is a bug.** Reaching for the same hold from the left or from the right can leave the torso differently, and that reads as natural — the body remembers how it got there. What is wrong is never that two paths differ, only that one of them lands somewhere *anatomically impossible*. | Settled — don't "fix" the solver into path independence |
 
 The brief in `docs/BRIEF.md` has been revised where playtesting proved it wrong;
@@ -81,7 +84,7 @@ npm run dev      # Vite dev server on :5173, bound to 0.0.0.0
 npm run verify   # prove generated walls are climbable (static solve), 7 days x 30
 npm run sim      # headless auto-climber (live solver): plant rate, jitter, invariants
 npm run measure  # what the biophysics model actually does, in numbers
-npm run ladder   # are the five levels actually five difficulties?
+npm run ladder   # are the five levels actually five difficulties? (read `human`)
 npm run fuzz     # haul 3 limbs at once to absurd places; can the body be broken?
 npm run jitter   # does the body ever settle into a bouncing loop?
 npm run icon     # regenerate the home-screen icon and favicons (needs rsvg-convert)
@@ -924,12 +927,24 @@ arm load — and `REST_STRAIN` is the threshold between draining and recovering.
 The whole pacing mechanic is that one number.
 
 It's calibrated against the measured spread of **real route stances** on level 1,
-which on `REF_DAY` runs p25 0.23 / median 0.30 / p90 0.44, so at `REST_STRAIN`
-0.26 about the best 35% recover. **A solver change moves this** — the oscillation
+which on `REF_DAY` runs p25 0.19 / median 0.28 / p90 0.37, so at `REST_STRAIN`
+0.28 about the best 50% recover. **A solver change moves this** — the oscillation
 fix left the figure standing slightly lower, which pushed every stance's strain up
-and cost a chunk of rest fraction until `REST_STRAIN` followed it. Harder levels
-are deliberately worse: `ladder` reports rests falling from 37% of stances on
-level 1 to 5% on level 5.
+and cost a chunk of rest fraction until `REST_STRAIN` followed it — and **so does a
+generator change**: teaching the walk to prefer stances you can stand up in moved
+every percentile at once. Harder levels are deliberately worse: `ladder` reports
+rests falling from 49% of stances on level 1 to 13% on level 5.
+
+**Calibrate it at a human pace, which for most of this prototype's life nobody
+did.** Every stamina constant was settled against the auto-climber's 0.33s per
+move; a person reading a sequence off a phone takes more like 1.83s. That 5.5x
+difference hid the entire pacing problem — at the robot's pace every level topped
+with 35–90% of the bar left, while at a human's, levels 3, 4 and 5 were **0/6 even
+played perfectly**, sitting at every recovering stance until full. Level 5 pumped
+out at move 10–14 of a 25–43 move problem, about a third of the way up. The only
+strategy the wall rewarded was going fast, which is the one demand a human finds
+*harder* than the harness does. `ladder`'s **`human` column** exists so that cannot
+happen again silently; read it, not `climbed`, when you touch anything here.
 `npm run measure` prints that spread and the resulting recover fraction. Always
 calibrate against it rather than against idealised stances: a clean test-harness
 stance scores ~0.12, far below anything the generator actually produces, and
@@ -1094,7 +1109,7 @@ with both hands on the finish hold, and the last two moves must plant without a
 resync. Averaging the match into a per-move rate would hide it entirely — it is two
 moves in thirty.
 
-Expect ~89–96% per-move plant rate from `sim`; the gate is 87%. It drags for a fixed
+Expect ~93–98% per-move plant rate from `sim`; the gate is 87%. It drags for a fixed
 0.18s and releases blind, and its misses split evenly between the hold sitting a hair
 beyond reach at that instant and a hair inside minimum — neither of which a human
 hits, because they hold until the target ring highlights. The gate is a regression
@@ -1111,13 +1126,45 @@ cascades and every later target is measured from the wrong place. Those syntheti
 stances are excluded from the anatomical invariants (`watch.synthetic`) — the
 figure never actually achieved them, so asserting on them measures the harness.
 
-**Known gap — the obvious next piece of work.** The generator only checks stances
-are *possible*, never that they're good. It averages ~30% of bodyweight on the
-arms across a problem (26–41% depending on the day's walls), and it never tries to
-put the feet under the body, which is why rests are scarcer than they should be.
-Teaching `stanceFeasible` to *prefer*
-low-arm-load stances (rather than merely accept any feasible one) is the
-highest-value change available.
+### The walk asks whether a stance is good, not only whether it holds
+
+This was the standing "known gap" and was the highest-value change available, so
+it is worth recording what it actually bought. The walk used to commit the
+**first** candidate that `stanceFeasible` accepted — and a stance with your feet
+dangling uselessly beneath you is entirely feasible, so it got committed as
+readily as a good one. Routes averaged 29% of bodyweight on the arms at level 1
+and 43% at level 5.
+
+`advance()` now weighs up to `T.STANCE_WEIGH` holdable candidates by
+`stanceArmLoad()` and keeps the best, stopping early at `T.STANCE_ARM_TARGET`.
+`pickReusable` does the same, for the same reason — reuse is a quarter of all moves
+at the top of the ladder, and the nearest hold to the ideal move is not necessarily
+the one you can stand on. Arm load now runs 21–22% across every level, against a
+floor of `HAND_HANG_BIAS` (20%).
+
+Four things about it:
+
+- **Arm load and NOT strain, and this is the whole trick.** Strain contains hold
+  quality, which *is* the difficulty ramp — a generator preferring low-strain
+  stances would quietly refuse to build a hard level, because the only way to lower
+  that term is to place better holds. Arm load is pure geometry: are your feet under
+  you. So it separates technique from difficulty and leaves the ladder alone.
+- **It scores through `stamina.js`, not a copy of the load rule.** `stanceArmLoad`
+  lives next to `loadShares` because a second answer to "which contact carries what"
+  is exactly the duplicate source of truth this repo keeps stamping out.
+  `stanceShapeOk` was split out of `stanceFeasible` so the scoring path pays for
+  `solveStatic` exactly once — it is by far the most expensive thing generation does.
+- **It costs nothing measurable.** Generation stays at 31–52ms per problem, because
+  the early exit fires on the first candidate most of the time. A single cold
+  measurement said 122ms; that was JIT warm-up, not the steady state.
+- **It moved every strain percentile**, so `REST_STRAIN` had to follow it. A
+  generator change invalidates that calibration exactly as hard as a solver change
+  does — see [Stamina and load](#stamina-and-load).
+
+The *remaining* gap is narrower: arm load is now flat across the ladder, so a hard
+level is no longer physically more awkward than an easy one, only sparser and worse
+held. Ramping `STANCE_ARM_TARGET` off `difficultyAt` would give that axis back
+without adding a second difficulty system. It has not been tried.
 
 ## Menu and difficulty
 
@@ -1149,7 +1196,7 @@ the ticks don't survive a reload.
 scalar the height ramp already drives (`difficultyAt(height, floor)`), so it moves
 hold quality, filler density and move distance together. Note that on a problem only
 ~430u tall the *height* half of that ramp barely engages, so a level's floor now does
-nearly all the work — which is why hold quality per level (0.90 → 0.28) is flatter
+nearly all the work — which is why hold quality per level (0.90 → 0.29) is flatter
 within a problem and steeper between them than it was on the endless wall.
 
 `npm run ladder` is the tool that justifies the spacing, and the table in
@@ -1164,8 +1211,12 @@ The column to watch is **`choices`**: how many legal moves a stance offers, and
 `stuck`, how many of the four limbs have none at all. That is the difference
 between a staircase and a problem — on level 5 an average stance offers 5 moves and
 nearly a whole limb has nowhere to go, so there may be no right-hand move until the
-right foot has moved. Ordering is the puzzle. Level 1 offers 11 moves a stance, where
-any order works. Rests fall 37% → 5% across the ladder.
+right foot has moved. Ordering is the puzzle. Level 1 offers 10 moves a stance, where
+any order works. Rests fall 49% → 13% across the ladder, and the `human` column —
+the same routes at 1.83s a move rather than 0.33s — falls 6/6 with 98% of the bar
+left to 2/6 with 11%. That column is the one to read: `climbed` is measured at a
+pace no hand can hit, and calibrating against it is how the hard levels became a
+race nobody could win.
 
 **Move distance is not the difficulty lever it looks like.** `MOVE_DIST` ramps
 52 → 84 across the ladder but the *achieved* move only goes 51 → 69, because a
@@ -1176,7 +1227,7 @@ check refuses anything longer. Asking for longer moves just costs plant rate.
 one new hold per limb move, density was pinned near 9.5 holds per 100u whatever
 else you tuned — a limb can only move so far, so the holds it needs arrive at a
 fixed rate. `T.REUSE` lets a move land on a hold that already exists, which breaks
-that link: density now runs 12.3 → 6.0 per 100u across the ladder. (Both numbers are
+that link: density now runs 12.2 → 6.0 per 100u across the ladder. (Both numbers are
 higher on a problem than they were on an endless wall, because a problem is short
 enough that the start stance's four jugs are a real fraction of it.)
 
