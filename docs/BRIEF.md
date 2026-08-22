@@ -340,15 +340,15 @@ thirty walls and tomorrow they are gone. The date is read off the *local* calend
 so the set turns over at each player's own midnight rather than at one shared instant
 that would land mid-evening for half of them. The menu shows the date, because
 otherwise the ticks appear to clear themselves overnight for no visible reason — and
-it is drawn as a chip sized for a thumb, since it is about to become the way into a
-calendar of past days. The menu is titled STICKMAN CLIMB, matching the name it
+it is drawn as a chip sized for a thumb, which is what it later became the way into a
+calendar of past days on. The menu is titled STICKMAN CLIMB, matching the name it
 installs under, rather than the CLIMB it said when there was only one thing it could
 have meant.
 
 **A tick now means "I did this one today".** Ticks are stored per day
 (`climb.days.v1`) rather than as one flat list, so the record of which problems were
-topped on which day survives the reset — which is what a streak, a score or a
-calendar will be built from. The old flat list is dropped rather than migrated: the
+topped on which day survives the reset — which is what the calendar was later built
+from, with no migration. The old flat list is dropped rather than migrated: the
 walls it named cannot be generated any more.
 
 **This exposed a real defect and it was fixed rather than papered over.** The
@@ -451,6 +451,46 @@ straight through it. `npm run catch` measures both halves of this.
 But stamina is the pacing mechanic, and running out of it now costs a few seconds and
 a re-established stance rather than the attempt. That was the trade the request asked
 for, and the refund is a slider if it turns out to be too generous.
+
+### 2026-08-21 — a calendar, and a second chance at yesterday
+
+Requested: a calendar view, reached by tapping the date chip, seven days wide, each
+date showing how many of that day's thirty were topped. Tapping a date shows that
+day's grid; if it is yesterday or today you can climb one.
+
+**The record was already the right shape, so nothing was stored for this.** Ticks
+have been kept per day since the daily set landed, precisely so a calendar could be
+drawn off them later, and it was — `game.days` is the whole of the data model. What
+did have to be separated is *what day it is* from *which day you are looking at*:
+`game.day` still follows the clock, `game.menuDay` is the grid on screen, and a
+rollover moves the second one only if it was pointing at the first. So a menu parked
+on a past day is left where it was put, and one showing today turns over at midnight
+as it always did.
+
+**Yesterday is playable and older days are not.** A wall is a seed and a date, so any
+day's thirty could be generated — what is withheld is only *starting* one. A set you
+missed is worth a day's grace; further back and the daily ritual stops meaning
+anything. Topping one of yesterday's problems ticks **yesterday**, taking that day
+from 4/30 to 5/30, because the wall has always carried its own day and the tick has
+always been filed there. Nothing about catching up wanted a second rule.
+
+**An old day's grid says what it is rather than arguing.** The tiles are drawn back
+and the footer reads *a record · only today and yesterday can be climbed*. A tap does
+nothing at all — the alternative, quietly starting today's wall instead, begins a
+climb nobody chose, and a banner over a screen you are only reading is worse than a
+line of text.
+
+**A month with paging, not a rolling window of recent weeks.** The window would have
+been less code and both of the calendar's jobs live at the recent end, but a month is
+what people already know how to read. Paging is bounded at both ends: forward at this
+month, back at the oldest day with a record — or at yesterday's month, since on the
+1st that is the only way to reach a day you can still climb.
+
+Two judgement calls worth flagging: this is progress made visible, not the scoring the
+brief excludes — there is no points system, only the count of thirty that was already
+being kept — and the date chip, which was deliberately inert on the grounds that a
+control which looks live and does nothing is worse than one that doesn't, is now the
+door both ways.
 
 ### Still open
 

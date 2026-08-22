@@ -305,8 +305,11 @@ export function installTuning(game, resize) {
     // schema edit and not a change to this file.
     const after = new Set(msg?.after ?? []);
     if (after.has('resize')) resize();
+    // The wall's own day, not today's: rebuilding must hand back the problem on
+    // screen. It declines if midnight has since aged that day out of the playable
+    // window, which is better than silently building a different wall.
     if (after.has('rebuild') && game.wall && game.state === 'climbing') {
-      game.startProblem(game.level, game.problem);
+      game.startProblem(game.level, game.problem, game.wall.day);
     }
 
     if (applied.length) {

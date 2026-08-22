@@ -76,6 +76,9 @@ Standing decisions, so they don't get relitigated by accident:
 | **The generator prefers stances you can stand up in.** The walk weighs candidates by arm load and keeps the best, rather than committing to the first that merely holds. Arm load and *not* strain, so difficulty is untouched. | Settled — replaced first-feasible |
 | **Letting go of both hands is not a free rest.** With no hand on the wall the footholds lose their strength discount on hold quality, because they are the only thing keeping you on. It rides on hold quality, so a no-hands stance on level 1 jugs still is a rest and one on level 5 crimps is not. | Settled — replaced a dominant strategy |
 | **Stamina is calibrated at a human pace, not the harness's.** 1.83s a move, not the auto-climber's 0.33s. `ladder`'s `human` column is the gate; `topped` is 6/6 on every rung and says nothing. | Settled — see [Stamina and load](#stamina-and-load) |
+| **The menu has two screens, not two states.** `game.screen` is `'grid'` or `'calendar'`; `game.state` stays the climb's lifecycle. Both `update` and `draw` fall through to the physics path on a state they don't recognise, and three places read `state === 'menu'` as "the list is up". | Settled — see [The calendar](#the-calendar-of-past-days) |
+| **Only today and yesterday can be climbed.** Older days generate identically — a seed is a seed — but the grid is a record to read rather than a set to start. A missed set is worth one day's grace; past that the daily ritual stops meaning anything. | Settled |
+| **A tick lands on the wall's own day**, so topping one of yesterday's problems today moves *yesterday* from 4/30 to 5/30. `topOut` already filed against `wall.day`; nothing about "catch up on what you missed" wanted a second rule. | Settled |
 | **Path dependence is a feature, and only its extreme is a bug.** Reaching for the same hold from the left or from the right can leave the torso differently, and that reads as natural — the body remembers how it got there. What is wrong is never that two paths differ, only that one of them lands somewhere *anatomically impossible*. | Settled — don't "fix" the solver into path independence |
 
 The brief in `docs/BRIEF.md` has been revised where playtesting proved it wrong;
@@ -419,12 +422,12 @@ install nudge is not.
 | File | Role |
 |---|---|
 | `src/tuning.js` | **every** tuning constant, plus the palette |
-| `src/day.js` | what day it is, locally: the seed and the storage key |
+| `src/day.js` | what day it is, locally: the seed, the storage key, the calendar's arithmetic and captions |
 | `src/body.js` | figure model + constraint solver (the core of the feel) |
 | `src/wall.js` | seeded generation, climbability proof, spatial index |
 | `src/stamina.js` | load distribution + the drain factors, as one `strain` scalar |
 | `src/game.js` | state, camera, drag interaction |
-| `src/render.js` | canvas drawing, the HUD, the level menu, and the hold silhouettes |
+| `src/render.js` | canvas drawing, the HUD, the level menu, the calendar, and the hold silhouettes |
 | `src/input.js` | Pointer Events plumbing |
 | `src/install.js` | should the menu nudge you to install it to your home screen? |
 | `src/update.js` | service worker registration, and "a new build is waiting" |
@@ -1136,23 +1139,41 @@ Four things about it are load-bearing:
   problem built comes from another seed. It is called from `showMenu()`, from
   `visibilitychange`, and once a second while the menu is up, since somebody can sit
   on that screen for hours.
+- **`game.day` is what day it is; `game.menuDay` is which day you are looking at.**
+  They are the same number until the calendar parks the menu on a past day, and then
+  every count, tick, label and tile on that screen is `menuDay`'s. The split has one
+  rule at each end: `rollDay` moves `menuDay` **only if it was pointing at the old
+  today**, so a parked menu is left where it was put and an unparked one follows the
+  clock; and `showMenu` sets it to `problemDay`, so you come back to the grid you
+  played rather than to today's. `game.problemDay` is a third: the day the wall on
+  screen was generated for, snapshotted at the tap rather than read in `buildLevel`,
+  because `visibilitychange` can roll the day in between and would otherwise hand you
+  a different wall.
 - **The menu shows the date**, in a chip under the title. Without it the ticks
   appear to have cleared themselves overnight for no reason the player can see. It
-  is on its way to being the door to a calendar of past days, so it is already sized
-  as a tap target: `dateChipRect(view)` returns `draw` (the 30pt bar you see) and
-  `tap` (the same rect padded to 44pt), and hit-testing it is one line in
-  `pointerDown`. Nothing is wired to it yet, deliberately — a control that looks
-  live and does nothing is worse than one that doesn't look live.
+  is also **the door to the calendar**, which is what `dateChipRect(view)` was built
+  and exported for: `draw` is the 30pt bar you see, `tap` the same rect padded to
+  44pt. One rect does three jobs, and the chevron says which — `FRI 21 AUG ›` opens
+  the calendar, `‹ WED 13 AUG` goes back to it from a day opened there, `‹ BACK`
+  leaves it. See [The calendar of past days](#the-calendar-of-past-days).
 
 **Ticks are per day, and the record of them is kept.** `localStorage` under
 `climb.days.v1`, shaped `{ "20260814": ["0:0", "2:5"], … }` — with a day-seeded
-generator that is enough to say exactly which walls those were, which is what a
-streak, a score or a calendar will want later without a migration. `game.sent` is
-just today's entry in `game.days`. It is capped at `T.HISTORY_DAYS` (400) so a phone
+generator that is enough to say exactly which walls those were. That is what the
+calendar is drawn from, and it needed no migration to get there, which was the whole
+point of storing it this shape. It is capped at `T.HISTORY_DAYS` (400) so a phone
 doesn't accumulate an unbounded record, and anything malformed in there is dropped
 rather than trusted — it is a key the player can edit. The old flat `climb.sent.v1`
 is deleted on load rather than migrated: those thirty walls cannot be generated any
 more, so the ticks name nothing.
+
+**Reading a day's ticks and writing them are different calls, and that matters now
+something iterates the map.** `ticksFor` creates the Set, because a caller about to
+write needs one; `game.ticksOn(day)` returns a shared empty Set instead. The menu
+reads one every frame, and through `ticksFor` that quietly filed an empty entry for
+every day ever *drawn* — invisible while `saveHistory` dropped empty sets on the way
+out, and a calendar full of days you never played the moment the calendar existed.
+`game.sent` (today's, via `ticksFor`) stays as the documented debug handle.
 
 **A dead-ended walk is re-rolled, and this is why that had to be fixed now.** The
 generator can paint itself into a corner — no limb has a legal move, the route stops
@@ -1292,6 +1313,25 @@ The menu is canvas-drawn like the rest of the HUD, hit-tested against
 style and showing a tick once topped. Layout is derived from the view, not a design
 size, so the same code works in a phone column and a letterboxed desktop window —
 and drawing and hit testing read the same rects, so they cannot disagree.
+`calendarRects(view, month)` / `calendarHit` are the same discipline for the other
+screen, and are pure geometry for the same reason: whether a cell *opens*, and
+whether an arrow is live, depend on the record rather than on the layout, so they
+are `game.canOpen` and `game.canPage`.
+
+**Which screen is up is `game.screen`, not a state.** It is `'grid'` or
+`'calendar'`, and `building` is always `'grid'`. Deliberately orthogonal to
+`game.state`: `update` early-returns only for `menu` and `building` before reaching
+`stepFigure`, and `draw` branches on the same pair before destructuring `wall`,
+`fig` and `stam`, so a sixth state would be two crashes to fix and three audits of
+places where `state === 'menu'` means "the list is up" — the once-a-second
+`rollDay`, `rollDay` clearing `game.last`, and `setDay`'s `showMenu()`.
+
+**`startProblem(level, index, day = game.menuDay)` is the only gate on what is
+playable**, and it returns whether it took. The grid tap, the number keys,
+`__game.startProblem` and the tuner's rebuild all funnel through it, so "today and
+yesterday" is written once. A refused call is a **no-op with no banner**: the tiles
+on an unplayable day are drawn back and the footer says why. Substituting today's
+wall instead would start a climb nobody chose.
 
 **Ticks persist in `localStorage` under `climb.days.v1`, keyed by day** — see
 [A new set every day](#a-new-set-every-day). Every access is wrapped in try/catch:
@@ -1354,6 +1394,55 @@ The hard ends of `QUALITY_ROUTE` and `QUALITY_FILL` were widened (0.3 → 0.1 an
 0.12 → 0.04) when the levels went in. At the old values the top three rungs
 collapsed onto each other — the auto-climber reached 1103/1008/1015u, i.e. levels
 4 and 5 were the same difficulty.
+
+## The calendar of past days
+
+One month at a time, seven columns wide, each cell carrying how many of that day's
+thirty were topped. It is drawn straight off `game.days` — the record was already
+being kept in exactly this shape, so nothing was stored or migrated for it.
+
+The navigation is a three-level stack that terminates: today's grid is the root, the
+chip opens the calendar, a cell opens that day's grid, and the chip goes back one
+step from either. `game.menuBack()` is the whole of it, and `Escape` / `m` calls it
+on the menu (it still means "leave the climb" everywhere else).
+
+Six things are load-bearing:
+
+- **A month with paging, not a rolling window of recent weeks.** The window is less
+  code and the recent end is where both jobs live — but a month is what people
+  already know how to read, and the record runs to `T.HISTORY_DAYS`. Paging is
+  bounded at both ends by `game.canPage`: forward stops at this month, back at
+  `earliestMonth()` — the month of the oldest day anything was topped on, *or* of
+  yesterday, whichever is earlier. Yesterday is in that `min` because it is playable
+  and can fall in the previous month: on the 1st, paging back is the only way to
+  reach it. A dead arrow is dimmed **and** not hit-tested, from the same predicate.
+- **`showCalendar()` reseeds `calMonth` every time it opens**, from the month of the
+  day the grid was showing. So the month being browsed has no lifetime outside the
+  screen, and nothing has to remember to move it at midnight.
+- **There is no minimum cell size, and that is the one place this differs from the
+  problem grid.** A month is four to six rows and they all have to be on screen at
+  once, so height wins: a portrait phone lands at 44–49pt, a landscape one at ~35pt.
+  A calendar you can only see five weeks of is a worse thing than small cells. Cells
+  are capped at `CAL.cellMax` and the block is centred, because past that they stop
+  reading as dates and start reading as buttons.
+- **Columns are Monday-first** (`CAL.weekStart`), so the weekend pairs at the end of
+  a row. `day.js` keeps its `WEEKDAYS` Sunday-first because that is what
+  `Date.getDay()` returns; the calendar rotates it and nothing else has to know.
+- **Only the two playable cells get the accent border** — today at full strength,
+  yesterday a shade back, both at two points. That pair reading as a pair is the
+  entire affordance on the screen; every other cell is a record, and the tally
+  colour is what those are for. A day with nothing on it shows `–` rather than
+  `0/30`, because thirty of those is a screenful of noise. Future days are dimmed
+  and inert, but kept in the grid so the last row still reads as a week.
+- **No band on this screen.** There is one band slot and it belongs to the root, so
+  `drawCalendar` doesn't draw one and `pointerDown` doesn't hit-test one — a hit test
+  for something invisible is how browsing your history turns into a page reload. An
+  update waiting is announced when you back out.
+
+`countColor` and `levelColor` both come off one `rampColor`, and they read it in
+**opposite directions**: on the level rows red means hard, on the calendar red means
+barely started. Two opposite ramps in one file is the sort of thing that looks like a
+bug later, so both say so at the call site.
 
 ## Coordinates
 
@@ -1589,11 +1678,19 @@ calendar will be built from.
 or set `__game.debug = true`. Note `fig` and `wall` are null while the menu is up.
 The `dbg` button (or `D`) shows the strain breakdown, the per-limb load shares,
 per-frame update/render cost, the problem's rise/span/move count, and the centre of
-mass. `R` restarts the current problem, `M` or `Escape` goes back to the menu, and
-the number keys jump to a level's first problem from anywhere.
-`__game.startProblem(level, index)` picks any of them from the console, but it needs
-two frames to build — and `requestAnimationFrame` throttles hard when the browser
-pane isn't focused, so give it seconds, not milliseconds.
+mass. `R` restarts the current problem, and the number keys jump to a level's first
+problem from anywhere. `M` or `Escape` leaves a climb; **on the menu it is one step
+back** — out of the calendar, or off a past day's grid.
+`__game.startProblem(level, index, day = menuDay)` picks any of them from the
+console, but it needs two frames to build — and `requestAnimationFrame` throttles
+hard when the browser pane isn't focused, so give it seconds, not milliseconds. It
+**returns false and does nothing** on a day outside today-and-yesterday, and so do
+the number keys, which is the same gate and not a separate one.
+
+The menu's own state is `__game.screen` (`'grid'` or `'calendar'`) and
+`__game.menuDay` (which day's grid). `__game.showCalendar()`, `__game.menuBack()`
+and `__game.openDay(20260813)` are the three moves, and `__game.canPlay(day)` /
+`canOpen(day)` / `canPage(±1)` answer why a tap did nothing.
 
 With the tuning rig open the overlay grows a `tune` block: the active slot, the
 revision the phone last applied, the telemetry rate, `msTune`, and which paths are
@@ -1614,9 +1711,23 @@ a cached reference used to do, and it presented as a top-out that didn't tick.
 
 `__game.day` is the day in force. **`__game.setDay(20260901)` climbs another day's
 set** without waiting for it, and `setDay(0)` hands the decision back to the clock —
-which is how you look at a wall a player is reporting a problem with. It is a debug
-lever and not a preview: a top-out is filed under whatever day is in force, so it
-writes real history. The debug overlay carries the day and seed, plus a `reroll`
+which is how you look at a wall a player is reporting a problem with. It moves
+`menuDay` with it and returns you to the grid, because "it is now this day" means
+show me it. It is a debug lever and not a preview: a top-out is filed under whatever
+day is in force, so it writes real history.
+
+To look at the calendar with something in it, fabricate a record rather than climbing
+thirty walls:
+
+```js
+const back = (n) => { const d = new Date(); d.setDate(d.getDate() - n);
+  return d.getFullYear()*10000 + (d.getMonth()+1)*100 + d.getDate(); };
+for (let i = 1; i <= 45; i++) {
+  const n = [0,1,3,5,8,12,30][i % 7], s = new Set();
+  while (s.size < n) s.add(`${(Math.random()*5)|0}:${(Math.random()*6)|0}`);
+  if (n) __game.days.set(back(i), s);
+}
+``` The debug overlay carries the day and seed, plus a `reroll`
 count on the rare problem whose first walk dead-ended.
 
 Frame cost is ~0.3ms of a 16.7ms budget, so if the browser reports a low fps it's

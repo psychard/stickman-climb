@@ -15,7 +15,13 @@
  */
 
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+/**
+ * Sunday first, because that is what `Date.getDay()` returns and one ordering is
+ * cheaper to keep honest than two. The calendar draws its columns Monday-first and
+ * rotates this itself; see CAL.weekStart in render.js.
+ */
+export const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
 /** Today as YYYYMMDD, in local time. Pass a Date to ask about another moment. */
 export function today(now = new Date()) {
@@ -37,10 +43,41 @@ export function shiftDay(day, n) {
   return today(d);
 }
 
+/** Which day of the month, 1..31. The digits carry it, so no Date needed. */
+export const dayOfMonth = (day) => day % 100;
+
+/** 0 = Sunday, matching `Date.getDay()` and the order of WEEKDAYS above. */
+export const weekdayOf = (day) => dayDate(day).getDay();
+
+/** The first of `day`'s month, as a day number. The anchor the calendar pages on. */
+export const monthStart = (day) => Math.floor(day / 100) * 100 + 1;
+
+/**
+ * `n` months after `day`'s month, as its first. Through Date for the same reason
+ * `shiftDay` is: December wraps the year, and nothing here should know that.
+ */
+export function shiftMonth(day, n) {
+  const d = dayDate(monthStart(day));
+  d.setMonth(d.getMonth() + n);
+  return today(d);
+}
+
+/** How many days that month has, February and leap years included. */
+export function daysInMonth(day) {
+  const d = dayDate(monthStart(day));
+  d.setMonth(d.getMonth() + 1);
+  d.setDate(0); // the last day of the month we started in
+  return d.getDate();
+}
+
+/** 'AUG 2026', for the calendar's title. */
+export function monthLabel(day) {
+  return `${MONTHS[(Math.floor(day / 100) % 100) - 1]} ${Math.floor(day / 10000)}`;
+}
+
 /** 'FRI 14 AUG', for the menu header. */
 export function dayLabel(day) {
-  const d = dayDate(day);
-  return `${WEEKDAYS[d.getDay()]} ${String(day % 100).padStart(2, '0')} ${MONTHS[(Math.floor(day / 100) % 100) - 1]}`;
+  return `${WEEKDAYS[weekdayOf(day)]} ${String(dayOfMonth(day)).padStart(2, '0')} ${MONTHS[(Math.floor(day / 100) % 100) - 1]}`;
 }
 
 /** Does this look like a day number at all? Guards what comes back from storage. */

@@ -8,7 +8,7 @@
 import { T, levelAt, lerp, clamp, clamp01 } from './tuning.js';
 import { LIMB_IDS, torsoFrame, anchorOf, specFor, ikJoint, centerOfMass } from './body.js';
 import { holdsInRange, styleFor, problemKey } from './wall.js';
-import { dayLabel } from './day.js';
+import { dayLabel, monthLabel, dayOfMonth, weekdayOf, daysInMonth, WEEKDAYS } from './day.js';
 import { wantsInstallHint, wantsMenuStep, installed } from './install.js';
 import { updateReady } from './update.js';
 
@@ -63,6 +63,26 @@ const MENU = {
   chipTap: 44,
   chipW: 104,
   chipTop: 34, // below the title's baseline
+};
+
+/**
+ * The calendar of past days. It reuses MENU's padding, header height and footer, so
+ * only what is genuinely different lives here.
+ *
+ * There is deliberately no minimum cell size, which is the one place this differs
+ * from the problem grid. A month is four to six rows and they all have to be on
+ * screen at once -- a calendar you can only see five weeks of is a worse thing than
+ * small cells -- so height wins and a landscape phone simply gets a tighter grid.
+ * A portrait phone lands at 44 to 49 points, comfortably over a thumb.
+ */
+const CAL = {
+  cols: 7,
+  weekStart: 1, // Monday-first, so the weekend pairs up at the end of each row
+  gap: 4,
+  cellMax: 62, // the same cap as a problem tile: past that they look like buttons
+  head: 16, // the MON..SUN caption row
+  arrow: 44, // the tap targets either side of the month title
+  titleMid: 94, // the month row, in the slot the grid gives the last result
 };
 
 /**
@@ -181,19 +201,12 @@ export function menuHit(view, pt) {
   return null;
 }
 
-/** Green through red across the five levels, so the ladder reads at a glance. */
-function levelColor(i) {
-  const t = i / Math.max(1, T.LEVELS.length - 1);
-  return t < 0.5
-    ? mixColor(T.COL.stamHi, T.COL.stamMid, t * 2)
-    : mixColor(T.COL.stamMid, T.COL.stamLo, (t - 0.5) * 2);
-}
-
-function drawMenu(ctx, game) {
-  const { view } = game;
-  const left = view.ox + view.safe.left + MENU.pad;
-  const cx = view.ox + view.playW / 2;
-
+/**
+ * The letterbox fill, then the gradient over the play column. Both menu screens and
+ * the wall itself open with exactly this, so it is one function rather than three
+ * copies that drift apart the first time the background changes.
+ */
+function drawBackdrop(ctx, view) {
   ctx.fillStyle = '#06070a';
   ctx.fillRect(0, 0, view.w, view.h);
   const g = ctx.createLinearGradient(0, 0, 0, view.h);
@@ -201,31 +214,10 @@ function drawMenu(ctx, game) {
   g.addColorStop(1, T.COL.bg0);
   ctx.fillStyle = g;
   ctx.fillRect(view.ox, 0, view.playW, view.h);
+}
 
-  // ------------------------------------------------------------------ header
-  const top = view.safe.top + MENU.pad;
-  const right = view.ox + view.playW - view.safe.right - MENU.pad;
-  const total = T.LEVELS.length * T.PROBLEMS_PER_LEVEL;
-
-  // The full name is nearly three times the width "CLIMB" was, so it is fitted to
-  // the column rather than assumed to fit one: a narrow desktop window would
-  // otherwise run it off the side, and the point size is the only thing that gives.
-  ctx.textAlign = 'left';
-  let size = MENU.title;
-  ctx.font = `600 ${size}px ui-monospace, monospace`;
-  const over = ctx.measureText('STICKMAN CLIMB').width / (right - left);
-  if (over > 1) {
-    size = Math.floor(size / over);
-    ctx.font = `600 ${size}px ui-monospace, monospace`;
-  }
-  ctx.fillStyle = T.COL.text;
-  ctx.fillText('STICKMAN CLIMB', left, top + size - 2);
-
-  // The date, on its own line under the title. The thirty problems are generated
-  // from it and are gone tomorrow, so it isn't decoration -- without it the ticks
-  // appear to have cleared themselves overnight for no reason the player can see.
-  // It reads as a chip because it is on its way to being the door to a calendar of
-  // past days; see dateChipRect for why what you see is smaller than what you hit.
+/** The chip in the header: the date on the grid, "back" on the calendar. */
+function drawChip(ctx, view, text) {
   const chip = dateChipRect(view).draw;
   ctx.fillStyle = 'rgba(255,255,255,0.05)';
   roundRect(ctx, chip.x, chip.y, chip.w, chip.h, 8);
@@ -238,21 +230,95 @@ function drawMenu(ctx, game) {
   ctx.textAlign = 'center';
   ctx.font = '600 12px ui-monospace, monospace';
   ctx.fillStyle = T.COL.text;
-  ctx.fillText(dayLabel(game.day), chip.x + chip.w / 2, chip.y + chip.h / 2 + 4);
+  ctx.fillText(text, chip.x + chip.w / 2, chip.y + chip.h / 2 + 4);
+  ctx.textAlign = 'left';
+  return chip;
+}
+
+/**
+ * The stamina palette as one ramp: 0 is stamLo, 0.5 stamMid, 1 stamHi.
+ *
+ * Read in both directions in this file, deliberately. On the level rows red means
+ * hard; on the calendar red means barely started. Two opposite ramps is the kind of
+ * thing that reads as a bug six months later, so to be explicit: they are opposite
+ * because the quantities are -- one is difficulty, the other is progress.
+ */
+function rampColor(t) {
+  const k = clamp01(t);
+  return k < 0.5
+    ? mixColor(T.COL.stamLo, T.COL.stamMid, k * 2)
+    : mixColor(T.COL.stamMid, T.COL.stamHi, (k - 0.5) * 2);
+}
+
+/** Green through red across the five levels, so the ladder reads at a glance. */
+function levelColor(i) {
+  return rampColor(1 - i / Math.max(1, T.LEVELS.length - 1));
+}
+
+/** How a day's tally is coloured: nothing done is dim, all thirty is green. */
+function countColor(n, total) {
+  return n === 0 ? T.COL.textDim : rampColor(n / total);
+}
+
+/**
+ * The title, fitted to the column. Shared by both menu screens.
+ *
+ * The full name is nearly three times the width "CLIMB" was, so it is fitted rather
+ * than assumed to fit: a narrow desktop window would otherwise run it off the side,
+ * and the point size is the only thing that gives.
+ */
+function drawMenuTitle(ctx, view) {
+  const left = view.ox + view.safe.left + MENU.pad;
+  const right = view.ox + view.playW - view.safe.right - MENU.pad;
+  ctx.textAlign = 'left';
+  let size = MENU.title;
+  ctx.font = `600 ${size}px ui-monospace, monospace`;
+  const over = ctx.measureText('STICKMAN CLIMB').width / (right - left);
+  if (over > 1) {
+    size = Math.floor(size / over);
+    ctx.font = `600 ${size}px ui-monospace, monospace`;
+  }
+  ctx.fillStyle = T.COL.text;
+  ctx.fillText('STICKMAN CLIMB', left, view.safe.top + MENU.pad + size - 2);
+}
+
+function drawMenu(ctx, game) {
+  const { view } = game;
+  const left = view.ox + view.safe.left + MENU.pad;
+  const cx = view.ox + view.playW / 2;
+  // Which day's grid this is. `menuDay`, not `day`: the calendar can park the menu on
+  // a past one, and then every count, tick and label here is that day's.
+  const day = game.menuDay;
+  const ticks = game.ticksOn(day);
+  const playable = game.canPlay(day);
+
+  drawBackdrop(ctx, view);
+
+  // ------------------------------------------------------------------ header
+  const top = view.safe.top + MENU.pad;
+  const total = T.LEVELS.length * T.PROBLEMS_PER_LEVEL;
+
+  drawMenuTitle(ctx, view);
+
+  // The date, on its own line under the title. The thirty problems are generated
+  // from it and are gone tomorrow, so it isn't decoration -- without it the ticks
+  // appear to have cleared themselves overnight for no reason the player can see.
+  // The chevron says which way the chip goes: forward into the calendar from today,
+  // back to it from a day opened there. See dateChipRect for why what you see is
+  // smaller than what you hit.
+  const chip = drawChip(ctx, view, day === game.day ? `${dayLabel(day)} ›` : `‹ ${dayLabel(day)}`);
 
   ctx.textAlign = 'left';
   ctx.font = '12px ui-monospace, monospace';
   ctx.fillStyle = T.COL.textDim;
-  ctx.fillText(
-    `${game.sent.size}/${total} topped`,
-    chip.x + chip.w + 12,
-    chip.y + chip.h / 2 + 4,
-  );
+  ctx.fillText(`${ticks.size}/${total} topped`, chip.x + chip.w + 12, chip.y + chip.h / 2 + 4);
 
   // Result of the attempt that sent you back here. This is the only reason the
   // menu doubles as the fall screen -- you land back on the list already knowing
   // how it ended.
-  if (game.last) {
+  // ...and only on the grid it happened on. Browse to another day and it is somebody
+  // else's news; `last.day` is the wall's own day, which is where the tick went too.
+  if (game.last && game.last.day === day) {
     const lvl = levelAt(game.last.level);
     const style = styleFor(game.last.problem || 0);
     ctx.font = '600 12px ui-monospace, monospace';
@@ -272,7 +338,7 @@ function drawMenu(ctx, game) {
   for (const row of menuRects(view)) {
     const lvl = T.LEVELS[row.level];
     const col = levelColor(row.level);
-    const done = row.tiles.filter((t) => game.sent.has(problemKey(t.level, t.index))).length;
+    const done = row.tiles.filter((t) => ticks.has(problemKey(t.level, t.index))).length;
 
     ctx.textAlign = 'left';
     ctx.font = '600 11px ui-monospace, monospace';
@@ -285,10 +351,17 @@ function drawMenu(ctx, game) {
     ctx.fillText(`${done}/${row.tiles.length}`, last.x + last.w, row.label.y + 10);
 
     for (const tile of row.tiles) {
-      const sent = game.sent.has(problemKey(tile.level, tile.index));
+      const sent = ticks.has(problemKey(tile.level, tile.index));
       const picked =
-        game.state === 'building' && game.level === tile.level && game.problem === tile.index;
+        game.state === 'building' &&
+        game.problemDay === day &&
+        game.level === tile.level &&
+        game.problem === tile.index;
       const style = styleFor(tile.index);
+
+      // An old day's tiles are a record, not a row of buttons, so they are drawn
+      // back: the ticks still read, and nothing invites a tap that does nothing.
+      ctx.globalAlpha = playable ? 1 : 0.55;
 
       ctx.fillStyle = picked
         ? 'rgba(255,209,102,0.22)'
@@ -327,6 +400,7 @@ function drawMenu(ctx, game) {
       ctx.font = `${Math.round(clamp(tile.h * 0.17, 7, 9))}px ui-monospace, monospace`;
       ctx.fillStyle = sent ? mixColor(col, '#ffffff', 0.3) : T.COL.textDim;
       ctx.fillText(style.name, midX, tile.y + tile.h - tile.h * 0.14);
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -347,8 +421,207 @@ function drawMenu(ctx, game) {
   ctx.textAlign = 'center';
   ctx.font = '10px ui-monospace, monospace';
   ctx.fillStyle = T.COL.textDim;
+  // On an old day the footer is the only thing saying why the tiles are inert. The
+  // alternative -- letting a tap start today's wall instead -- begins a climb nobody
+  // chose, and a banner over a screen you are only reading is worse than a line.
   ctx.fillText(
-    'drag hands and feet onto holds  ·  match the top with both',
+    playable
+      ? 'drag hands and feet onto holds  ·  match the top with both'
+      : 'a record  ·  only today and yesterday can be climbed',
+    cx,
+    view.h - view.safe.bottom - 10,
+  );
+  ctx.textAlign = 'left';
+}
+
+// --------------------------------------------------------------------------
+// the calendar
+// --------------------------------------------------------------------------
+
+/**
+ * One month's cells and captions. `month` is passed in rather than read off the
+ * clock, for the same reason the generator takes a day: the draw and the hit test
+ * have to agree, and it has to be pinnable.
+ *
+ * Pure geometry. Whether a cell opens, and whether an arrow is live, are game's
+ * rules -- see `canOpen` and `canPage` -- because they depend on the record and this
+ * does not. Days outside the month are simply absent from `cells`, so there is
+ * nothing to hit-test in the blanks and nothing to remember not to draw.
+ */
+export function calendarRects(view, month) {
+  const left = view.ox + view.safe.left + MENU.pad;
+  const right = view.ox + view.playW - view.safe.right - MENU.pad;
+  const w = right - left;
+  const top = view.safe.top + MENU.pad;
+
+  const days = daysInMonth(month);
+  const lead = (weekdayOf(month) - CAL.weekStart + 7) % 7;
+  const rows = Math.ceil((lead + days) / 7);
+
+  const headY = view.safe.top + MENU.header;
+  const availH = view.h - headY - CAL.head - view.safe.bottom - MENU.footer;
+  const byWidth = (w - CAL.gap * (CAL.cols - 1)) / CAL.cols;
+  const byHeight = (availH - CAL.gap * (rows - 1)) / rows;
+  const cell = Math.min(CAL.cellMax, byWidth, byHeight);
+
+  // Centred, because the cap on cell size can leave the block narrower than the
+  // column -- which it does on any desktop window.
+  const x0 = left + (w - (cell * CAL.cols + CAL.gap * (CAL.cols - 1))) / 2;
+  const y0 = headY + CAL.head;
+  const colX = (col) => x0 + col * (cell + CAL.gap);
+
+  const midY = top + CAL.titleMid;
+  const arrow = (i) => ({
+    x: right - CAL.arrow * (i + 1),
+    y: midY - CAL.arrow / 2,
+    w: CAL.arrow,
+    h: CAL.arrow,
+  });
+
+  const cells = [];
+  for (let d = 1; d <= days; d++) {
+    const day = month + d - 1;
+    const col = (weekdayOf(day) - CAL.weekStart + 7) % 7;
+    const row = Math.floor((lead + d - 1) / 7);
+    cells.push({
+      day,
+      col,
+      row,
+      x: colX(col),
+      y: y0 + row * (cell + CAL.gap),
+      w: cell,
+      h: cell,
+    });
+  }
+
+  return {
+    month,
+    rows,
+    cell,
+    title: { x: left, y: midY },
+    prev: arrow(1),
+    next: arrow(0),
+    headY,
+    head: Array.from({ length: CAL.cols }, (_, i) => ({
+      label: WEEKDAYS[(CAL.weekStart + i) % 7],
+      x: colX(i),
+      w: cell,
+    })),
+    cells,
+  };
+}
+
+/** The day under `pt`, or null. */
+export function calendarHit(view, month, pt) {
+  for (const cell of calendarRects(view, month).cells) {
+    if (hitsRect(cell, pt)) return cell.day;
+  }
+  return null;
+}
+
+function drawCalendar(ctx, game) {
+  const { view } = game;
+  const cx = view.ox + view.playW / 2;
+  const total = T.LEVELS.length * T.PROBLEMS_PER_LEVEL;
+  const r = calendarRects(view, game.calMonth);
+
+  drawBackdrop(ctx, view);
+  drawMenuTitle(ctx, view);
+
+  // The chip is the same rect the date occupies on the grid, doing the same job in
+  // reverse -- see dateChipRect. Next to it, how much of this month was played at
+  // all, which is the one number a month of cells doesn't already say.
+  const chip = drawChip(ctx, view, '‹ BACK');
+  let played = 0;
+  for (const c of r.cells) if (game.ticksOn(c.day).size) played++;
+  ctx.font = '12px ui-monospace, monospace';
+  ctx.fillStyle = T.COL.textDim;
+  ctx.fillText(
+    `${played} ${played === 1 ? 'day' : 'days'} climbed`,
+    chip.x + chip.w + 12,
+    chip.y + chip.h / 2 + 4,
+  );
+
+  // ------------------------------------------------------------- month + arrows
+  ctx.font = '600 14px ui-monospace, monospace';
+  ctx.fillStyle = T.COL.text;
+  ctx.fillText(monthLabel(r.month), r.title.x, r.title.y + 5);
+
+  for (const [n, rect] of [
+    [-1, r.prev],
+    [1, r.next],
+  ]) {
+    const live = game.canPage(n);
+    ctx.globalAlpha = live ? 1 : 0.25;
+    ctx.textAlign = 'center';
+    ctx.font = '600 20px ui-monospace, monospace';
+    ctx.fillStyle = live ? T.COL.text : T.COL.textDim;
+    ctx.fillText(n < 0 ? '‹' : '›', rect.x + rect.w / 2, rect.y + rect.h / 2 + 7);
+    ctx.globalAlpha = 1;
+  }
+
+  // ------------------------------------------------------------- the weekdays
+  ctx.textAlign = 'center';
+  ctx.font = '9px ui-monospace, monospace';
+  ctx.fillStyle = T.COL.textDim;
+  for (const h of r.head) ctx.fillText(h.label, h.x + h.w / 2, r.headY + 11);
+
+  // ------------------------------------------------------------- the days
+  for (const c of r.cells) {
+    const n = game.ticksOn(c.day).size;
+    const future = c.day > game.day;
+    const col = countColor(n, total);
+    // Only two cells get the accent border, and they are the two you can climb --
+    // today at full strength, yesterday a shade back. Both are drawn at two points,
+    // because that pair reading as a pair is the whole affordance on this screen:
+    // every other cell is a record, and the tally colour is what those are for.
+    const play = game.canPlay(c.day);
+    const stroke =
+      c.day === game.day
+        ? T.COL.inRange
+        : play
+          ? mixColor(T.COL.inRange, '#000000', 0.3)
+          : n
+            ? col
+            : 'rgba(255,255,255,0.08)';
+
+    ctx.globalAlpha = future ? 0.3 : 1;
+    ctx.fillStyle = n ? mixColor(col, '#000000', 0.72) : 'rgba(255,255,255,0.04)';
+    roundRect(ctx, c.x, c.y, c.w, c.h, 8);
+    ctx.fill();
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = play ? 2 : 1;
+    roundRect(ctx, c.x + 0.5, c.y + 0.5, c.w - 1, c.h - 1, 8);
+    ctx.stroke();
+
+    const midX = c.x + c.w / 2;
+    ctx.font = `600 ${Math.round(clamp(c.h * 0.26, 9, 15))}px ui-monospace, monospace`;
+    ctx.fillStyle = c.day === game.day ? T.COL.text : T.COL.textDim;
+    ctx.fillText(String(dayOfMonth(c.day)), midX, c.y + c.h * 0.38);
+
+    // A day with nothing on it shows a dash, not 0/30: thirty of those in a row is
+    // a screen of noise, and the point of the colour is to make the played days
+    // findable at a glance.
+    if (!future) {
+      ctx.font = `600 ${Math.round(clamp(c.h * 0.23, 8, 12))}px ui-monospace, monospace`;
+      ctx.fillStyle = col;
+      ctx.fillText(n ? `${n}/${total}` : '–', midX, c.y + c.h * 0.78);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ------------------------------------------------------------------ footer
+  // No band on this screen: there is one slot and it belongs to the root. An update
+  // waiting while you browse is announced when you back out -- and `pointerDown`
+  // must not hit-test it here either, or a tap in the bottom row applies a build
+  // from a band that was never drawn.
+  if (game.overlay?.(ctx, view, 'menu')) return;
+
+  ctx.textAlign = 'center';
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.fillStyle = T.COL.textDim;
+  ctx.fillText(
+    'tap a day  ·  today and yesterday can be climbed',
     cx,
     view.h - view.safe.bottom - 10,
   );
@@ -479,7 +752,8 @@ function drawShareGlyph(ctx, x, y, s) {
 
 export function draw(ctx, game) {
   if (game.state === 'menu' || game.state === 'building') {
-    drawMenu(ctx, game);
+    if (game.screen === 'calendar') drawCalendar(ctx, game);
+    else drawMenu(ctx, game);
     return;
   }
 
@@ -494,14 +768,7 @@ export function draw(ctx, game) {
   const toScreenY = (y) => (y - cam.y) * s;
 
   // ------------------------------------------------------------- background
-  ctx.fillStyle = '#06070a';
-  ctx.fillRect(0, 0, w, h);
-
-  const g = ctx.createLinearGradient(0, 0, 0, h);
-  g.addColorStop(0, T.COL.bg1);
-  g.addColorStop(1, T.COL.bg0);
-  ctx.fillStyle = g;
-  ctx.fillRect(ox, 0, pw, h);
+  drawBackdrop(ctx, view);
 
   // everything below is clipped to the play column so the letterbox stays clean
   ctx.save();

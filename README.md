@@ -10,7 +10,8 @@ both feet on the same hold, a reachy one -- and they are ticked off when topped.
 
 **The thirty are the day's**, seeded from the local date, so everyone on the same
 calendar day climbs the same walls and tomorrow they are gone. The set turns over at
-your own midnight, and what you topped on which day is kept.
+your own midnight, and what you topped on which day is kept — tap the date to see it
+as a calendar, and to go back for anything you missed yesterday.
 
 The point of the prototype is to find out whether dragging limbs around a wall
 feels good. See [docs/BRIEF.md](docs/BRIEF.md) for scope and intent.
@@ -68,10 +69,14 @@ PNGs are committed so the build never has to).
   on for a moment.
 - Stamina drains from bad holds, bent limbs, being off-balance, and weight on
   your arms — and it comes back on a straight-armed, balanced, footed rest.
+- **Tap the date** for a calendar of past days, seven wide, each showing how many of
+  that day's thirty you topped. Tap a day to see its grid. **Today and yesterday can
+  be climbed** — topping one of yesterday's counts for yesterday — and anything
+  further back is a record to look at.
 
 Tap `dbg` (or press `D`) for the strain breakdown and frame timings. `R` restarts the
-problem, `M` or `Escape` goes back to the menu, and the number keys jump to a
-level's first problem.
+problem and the number keys jump to a level's first problem. `M` or `Escape` leaves a
+climb; on the menu it is one step back, out of the calendar or off a past day.
 
 ### Offline
 

@@ -61,7 +61,12 @@ export function attachInput(canvas, game) {
   window.addEventListener('keydown', (e) => {
     if (e.key === 'r' || e.key === 'R') game.restart();
     if (e.key === 'd' || e.key === 'D') game.toggleDebug();
-    if (e.key === 'm' || e.key === 'M' || e.key === 'Escape') game.showMenu();
+    // From a climb this is the way out; on the menu it is one step back -- out of the
+    // calendar, or off a past day's grid. Two presses reach the root from anywhere.
+    if (e.key === 'm' || e.key === 'M' || e.key === 'Escape') {
+      if (game.state === 'menu') game.menuBack();
+      else game.showMenu();
+    }
     // number keys jump straight to a level, from the menu or mid-climb
     const n = Number(e.key);
     if (Number.isInteger(n) && n >= 1) game.startLevel(n - 1); // startLevel clamps

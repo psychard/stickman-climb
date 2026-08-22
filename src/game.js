@@ -50,7 +50,7 @@
  */
 
 import { T } from './tuning.js';
-import { today, isDay } from './day.js';
+import { today, isDay, shiftDay, monthStart, shiftMonth } from './day.js';
 import { generateProblem, holdsNear, holdsInRange, problemKey } from './wall.js';
 import {
   createFigure,
@@ -64,7 +64,17 @@ import {
   LIMB_IDS,
 } from './body.js';
 import { createStamina, updateStamina } from './stamina.js';
-import { draw, debugButtonRect, menuButtonRect, menuHit, hitsRect, updateBandRect } from './render.js';
+import {
+  draw,
+  debugButtonRect,
+  menuButtonRect,
+  menuHit,
+  calendarRects,
+  calendarHit,
+  dateChipRect,
+  hitsRect,
+  updateBandRect,
+} from './render.js';
 import { applyUpdate, checkForUpdate } from './update.js';
 
 export function createGame(canvas) {
@@ -103,6 +113,24 @@ export function createGame(canvas) {
     day: 0,
     dayForced: 0,
     dayCheck: 0, // seconds since the clock was last asked, on the menu
+    // The menu has two screens -- the problem grid and the calendar of past days --
+    // and they are a sub-view rather than a sixth game state. `state` is the climb's
+    // lifecycle, and both `update` and `draw` fall through to the physics path on a
+    // state they do not recognise, so a 'calendar' state would be two crashes and
+    // three audits of places where `state === 'menu'` means "the list is up".
+    screen: 'grid',
+    // Which day's grid is on screen, as against `day`, which is what day it actually
+    // is. The two are the same until the calendar parks the menu on a past day.
+    menuDay: 0,
+    // The day the problem being built or climbed was generated for. Snapshotted at
+    // the tap rather than read in `buildLevel`, because `rollDay` fires from
+    // `visibilitychange` in any state and would otherwise hand you a different wall
+    // if you backgrounded the phone across midnight between the two.
+    problemDay: 0,
+    // Which month the calendar is showing, as its first. Only alive while it is up:
+    // `showCalendar` reseeds it every time, so nothing else has to remember to move
+    // it at midnight.
+    calMonth: 0,
     debug: false,
     fps: 60,
     msUpdate: 0,
@@ -127,11 +155,40 @@ export function createGame(canvas) {
       return ticksFor(game, game.day);
     },
 
+    /**
+     * A day's ticks, without creating an entry for that day. `ticksFor` makes the Set
+     * because something is about to be written to it; this one is for reading, and the
+     * menu reads one every frame. Through `ticksFor` that quietly filled `days` with
+     * an empty Set for every day ever drawn -- invisible while nothing iterated the
+     * map, and a calendar full of days you never played the moment something did.
+     */
+    ticksOn(day) {
+      return game.days.get(day) ?? NO_TICKS;
+    },
+
+    /**
+     * Can this day still be climbed? Today and yesterday. A set you missed is worth
+     * one day's grace; older than that and the daily ritual stops meaning anything,
+     * so an old day is a record to read rather than a set to play.
+     */
+    canPlay(day) {
+      return day === game.day || day === shiftDay(game.day, -PLAY_DAYS_BACK);
+    },
+
+    /** Can this day's grid be opened at all? Anything except the future. */
+    canOpen(day) {
+      return isDay(day) && day <= game.day;
+    },
+
     showMenu() {
       // Rolled BEFORE the state flips, which is what lets rollDay tell "the day
       // turned while the list sat open" from "the day turned during the climb whose
       // result I am about to show".
       game.rollDay();
+      // Back to the grid you left rather than to today's: the wall carried its own
+      // day and its tick was filed there, so that is the grid the result belongs on.
+      if (game.problemDay) game.menuDay = game.problemDay;
+      game.screen = 'grid';
       game.state = 'menu';
       game.pointers.clear();
       // The menu is the only place an update can be announced, so it's the only
@@ -152,7 +209,12 @@ export function createGame(canvas) {
     rollDay() {
       const day = game.dayForced || today();
       if (day === game.day) return false;
+      const was = game.day;
       game.day = day;
+      // "You are looking at today" has to keep meaning that, so a menu that was
+      // showing today follows the clock. One deliberately parked on a past day from
+      // the calendar is a choice, and is left where it was put.
+      if (game.menuDay === was) game.menuDay = day;
       // A result banner left from before the rollover names a problem from a set
       // that no longer exists, so it goes. One you have just this second finished
       // does not: it is the report on the attempt you made, whichever set that was
@@ -172,21 +234,95 @@ export function createGame(canvas) {
       game.dayForced = isDay(day) ? day : 0;
       game.rollDay();
       if (game.state !== 'menu') game.showMenu();
+      // "It is now this day" means show me it, whatever the menu was parked on.
+      game.menuDay = game.day;
+      game.screen = 'grid';
       return game.day;
     },
 
-    /** Pick a problem from the menu. The wall is built a frame later; see above. */
-    startProblem(level, index) {
+    // ------------------------------------------------------------- the calendar
+    /** Into the calendar, on the month of whichever day the grid was showing. */
+    showCalendar() {
+      game.calMonth = monthStart(game.menuDay);
+      game.screen = 'calendar';
+    },
+
+    /**
+     * One step back. The calendar returns to today's grid, a past day's grid returns
+     * to the calendar it was opened from, and today's grid is the root -- so it is at
+     * most two presses from anywhere and it terminates. Returns whether it moved.
+     */
+    menuBack() {
+      if (game.screen === 'calendar') {
+        game.menuDay = game.day;
+        game.screen = 'grid';
+        return true;
+      }
+      if (game.menuDay !== game.day) {
+        game.showCalendar();
+        return true;
+      }
+      return false;
+    },
+
+    /** Show a day's grid. Refuses the future, which has neither record nor walls. */
+    openDay(day) {
+      if (!game.canOpen(day)) return false;
+      game.menuDay = day;
+      game.screen = 'grid';
+      return true;
+    },
+
+    /**
+     * The oldest month the calendar pages back to: the month of the oldest day
+     * anything was topped on, or of yesterday, whichever is earlier. Yesterday is in
+     * there because it is playable and can fall in the previous month -- on the 1st,
+     * paging back is the only way to reach it.
+     */
+    earliestMonth() {
+      let oldest = monthStart(shiftDay(game.day, -PLAY_DAYS_BACK));
+      for (const [day, ticks] of game.days) {
+        if (ticks.size && day < oldest) oldest = monthStart(day);
+      }
+      return oldest;
+    },
+
+    /** Is there a month that way? Forward stops at this one, back at earliestMonth. */
+    canPage(n) {
+      const to = shiftMonth(game.calMonth, n);
+      return to >= game.earliestMonth() && to <= monthStart(game.day);
+    },
+
+    pageMonth(n) {
+      if (!game.canPage(n)) return false;
+      game.calMonth = shiftMonth(game.calMonth, n);
+      return true;
+    },
+
+    // ------------------------------------------------------------- starting one
+    /**
+     * Pick a problem from the menu. The wall is built a frame later; see above.
+     *
+     * The day is a parameter defaulting to the one being browsed, and the check on it
+     * is the *only* gate on what is playable: the grid tap, the number keys, the
+     * console and the tuner's rebuild all come through here. It returns whether it
+     * took, so a caller that isn't a tap can tell.
+     */
+    startProblem(level, index, day = game.menuDay) {
+      if (!game.canPlay(day)) return false;
+      game.problemDay = day;
       game.level = clampIndex(level, T.LEVELS.length);
       game.problem = clampIndex(index, T.PROBLEMS_PER_LEVEL);
+      game.screen = 'grid';
       game.state = 'building';
       game.buildFrames = 0;
       game.pointers.clear();
+      return true;
     },
 
     /** Kept for the number-key shortcut: the first problem of a level. */
     startLevel(index) {
-      game.startProblem(index, 0);
+      return game.startProblem(index, 0);
     },
 
     /** Retry the current problem. No-op from the menu, where there is no wall yet. */
@@ -210,8 +346,37 @@ export function createGame(canvas) {
     // ---------------------------------------------------------------- input
     pointerDown(id, screenPt) {
       if (game.state === 'menu') {
+        // One rect, three jobs: into the calendar from today's grid, back to it from
+        // a day opened there, back out of it. It is tested before anything else on
+        // either screen, which is what keeps it from being shadowed.
+        if (hitsRect(dateChipRect(game.view).tap, screenPt)) {
+          if (game.screen === 'calendar') game.menuBack();
+          else game.showCalendar();
+          return;
+        }
+
+        if (game.screen === 'calendar') {
+          const cal = calendarRects(game.view, game.calMonth);
+          // Arrows first: they sit above the grid, but a dead one must not swallow
+          // a tap either, so `canPage` gates the hit exactly as it dims the glyph.
+          for (const [n, rect] of [
+            [-1, cal.prev],
+            [1, cal.next],
+          ]) {
+            if (hitsRect(rect, screenPt)) {
+              game.pageMonth(n);
+              return;
+            }
+          }
+          const day = calendarHit(game.view, game.calMonth, screenPt);
+          if (day !== null) game.openDay(day);
+          return;
+        }
+
         // The update band sits below the grid and only exists while a new build
-        // is waiting, so it can't shadow a tile.
+        // is waiting, so it can't shadow a tile. Grid only: it isn't drawn on the
+        // calendar, and a hit test for something invisible is how a browse turns
+        // into a page reload.
         const band = updateBandRect(game.view);
         if (band && hitsRect(band, screenPt)) {
           applyUpdate();
@@ -313,7 +478,7 @@ export function createGame(canvas) {
 
 /** Generate the picked problem and put the figure on its start stance. */
 function buildLevel(game) {
-  game.wall = generateProblem(game.level, game.problem, game.day);
+  game.wall = generateProblem(game.level, game.problem, game.problemDay);
   game.fig = createFigure(game.wall.start);
   game.stam = createStamina();
   game.state = 'climbing';
@@ -325,6 +490,16 @@ function buildLevel(game) {
 }
 
 const clampIndex = (v, n) => Math.max(0, Math.min(n - 1, v | 0));
+
+/**
+ * How far back a set stays playable. One day: missing a set is worth a day's grace,
+ * and beyond that the daily ritual stops meaning anything. A navigation rule rather
+ * than a tuning knob, so it lives here and not in `tuning.js`.
+ */
+const PLAY_DAYS_BACK = 1;
+
+/** Shared, and never written to. See `ticksOn`. */
+const NO_TICKS = new Set();
 
 /**
  * Which problems were topped, by day, from localStorage.
