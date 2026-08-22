@@ -53,6 +53,10 @@ export function createFigure(stance) {
     chestV: { x: 0, y: 0 },
     limbs: {},
     falling: false,
+    // Falling AND already on the floor. The fall is catchable, so `falling` alone no
+    // longer means "this attempt is over" -- this is the flag that does, and it is
+    // what the game starts FALL_LINGER on. See stepFigure's falling branch.
+    grounded: false,
     // Worst constraint violation left standing at the END of the last substep.
     // escapeWedge triggers on this rather than re-measuring mid-substep; see there.
     violation: 0,
@@ -95,6 +99,7 @@ export function resetToStance(fig, stance) {
     if (limb.hold) limb.pos = { x: limb.hold.x, y: limb.hold.y };
   }
   fig.falling = false;
+  fig.grounded = false;
   fig.hipV = { x: 0, y: 0 };
   fig.chestV = { x: 0, y: 0 };
   fig.violation = 0;
@@ -748,14 +753,40 @@ export function stepFigure(fig, dt) {
   const limbs = LIMB_IDS.map((id) => fig.limbs[id]);
 
   if (fig.falling) {
-    // off the wall: real ballistic dynamics, torso length still enforced
-    fig.hipV.y += T.GRAVITY * dt;
-    fig.chestV.y += T.GRAVITY * dt;
-    fig.hip.x += fig.hipV.x * dt;
-    fig.hip.y += fig.hipV.y * dt;
-    fig.chest.x += fig.chestV.x * dt;
-    fig.chest.y += fig.chestV.y * dt;
-    enforceTorso(fig);
+    // Off the wall: real ballistic dynamics, torso length still enforced.
+    //
+    // A fall now RUNS, rather than being a fixed beat of feedback: it is catchable
+    // (a hand dragged onto a hold latches it -- see catchHold in game.js), so it
+    // lasts as long as the height it started from, which off the top of a problem
+    // is about three quarters of a second. That makes the ground load-bearing. A
+    // body that keeps accelerating past y = 0 is out of frame long before the game
+    // has finished saying where you landed, and the camera can't follow it down
+    // because it is clamped to the ground on purpose.
+    if (!fig.grounded) {
+      fig.hipV.y += T.GRAVITY * dt;
+      fig.chestV.y += T.GRAVITY * dt;
+      fig.hip.x += fig.hipV.x * dt;
+      fig.hip.y += fig.hipV.y * dt;
+      fig.chest.x += fig.chestV.x * dt;
+      fig.chest.y += fig.chestV.y * dt;
+      enforceTorso(fig);
+
+      // Landing is measured at the FEET and not at the hip, because the limbs hang
+      // a leg's length below it -- stopping the hip at y = 0 buries them. Both ends
+      // of the torso move by the same correction, so its length and its lean are
+      // whatever the fall left them as; nothing here is trying to pose a landing.
+      const floor = T.GROUND_Y - T.LEG.pref * 0.9;
+      if (fig.hip.y >= floor) {
+        const dy = floor - fig.hip.y;
+        fig.hip.y += dy;
+        fig.chest.y += dy;
+        fig.hipV = { x: 0, y: 0 };
+        fig.chestV = { x: 0, y: 0 };
+        fig.grounded = true;
+      }
+    }
+    // Still run on the frame you land: the limbs settle to hanging over the next
+    // few frames, which is the only thing that reads as coming to rest.
     placeEndpoints(fig, limbs);
     return;
   }

@@ -53,6 +53,7 @@ export const GROUPS = [
       'TOP_HOLD_TIME',
       'TOP_LINGER',
       'FALL_LINGER',
+      'CATCH_STAMINA',
     ],
   },
   {
@@ -149,7 +150,10 @@ export const DESC = {
   TOP_HOLD_TIME:
     'Seconds both hands must stay on the finish hold to send it — controlling the top, not slapping it.',
   TOP_LINGER: 'Seconds of TOPPED on screen before the menu comes back.',
-  FALL_LINGER: 'Seconds spent watching yourself fall before the menu comes back.',
+  FALL_LINGER: 'Seconds lying on the ground before the menu comes back.',
+  CATCH_STAMINA:
+    'Stamina a mid-fall catch hands back, if you had less. 0..1. Most catches are ' +
+    'catches from empty, so below about 0.1 the save is undone on the next frame.',
 
   // --------------------------------------------------------- calibration
   REST_STRAIN:

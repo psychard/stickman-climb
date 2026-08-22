@@ -11,6 +11,7 @@
     "icon": "node tools/make-icon.mjs",
     "verify": "node tools/verify-wall.mjs",
     "sim": "node tools/sim-check.mjs",
+    "catch": "node tools/catch.mjs",
     "measure": "node tools/measure.mjs",
     "ladder": "node tools/ladder.mjs",
     "fuzz": "node tools/fuzz-drag.mjs",

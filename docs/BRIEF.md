@@ -39,7 +39,11 @@ gym. Topping a problem ticks it off the grid, and the ticks persist.
 
 ### Falling
 
-The player falls if:
+Coming off the wall is not the end of the attempt — **hitting the ground is**. While
+you are in the air you can still drag a hand onto a hold and latch it, and carry on
+climbing from there. A fall is a mistake to recover from, not a verdict.
+
+The player comes off the wall if:
 
 1. **All four limbs leave the wall** at once,
 2. **Stamina runs out**, or
@@ -50,6 +54,8 @@ The player falls if:
    no hand on the wall you are standing rather than hanging, so the centre of mass
    has to be over the base of support. You can be out past it briefly — that is a
    lunge — but not indefinitely.
+
+...and the attempt ends when the falling figure reaches the floor.
 
 ### Stamina
 
@@ -96,7 +102,9 @@ Build **only** this:
 - Max-reach limits with body lunge/shift.
 - Stamina bar with the three drain factors and recovery.
 - Falling on peel-off, on stamina depletion, and on letting go of both hands where
-  the feet cannot hold you; falling returns to the menu.
+  the feet cannot hold you. A fall is catchable — a hand dragged onto a hold in mid-air
+  puts you back on the wall — and the attempt ends at the ground, which returns you to
+  the menu.
 - Scrolling camera.
 
 Explicitly **out of scope for now** (do not build these yet):
@@ -401,6 +409,48 @@ hauled off the side of the wall: full stretch drops you at 0.46s, a moderate lea
 balanced on the feet alone is free indefinitely. The base of support is drawn under
 the feet the moment the second hand comes off, because otherwise the rule is
 invisible until it kills you.
+
+### 2026-08-21 — a fall is catchable
+
+Requested from play: coming off the wall should not immediately spell the end. You
+should be able to grab on again on the way down, and the attempt should end when you
+hit the ground.
+
+**So `falling` became a state you can play out of.** Drag a hand onto a hold while you
+are in the air and you latch it, which puts you straight back into climbing, hanging
+off one arm. The gate is the ordinary grab — the same reach, pose cone, stance
+solvability and the same rings — because mid-air is where the ring being a promise
+matters most. What a fall does relax is only what a fall makes meaningless: there is no
+tap-to-release to disambiguate a travel threshold from and no other limb a stray touch
+could be hauling, so a single **tap on a hold** catches it. Feet are excluded: with no
+hand on the wall the balance rule above starts running, so a latched foot buys the
+half-second it takes to topple and then drops you again.
+
+**The ground became load-bearing.** A fall used to run for a fixed 0.9s and it did not
+matter where the figure was when that expired; now it runs as long as the height it
+started from, so it stops the body on the floor — measured at the feet, since the limbs
+hang a leg's length below the hip — and only then does the linger run. That linger
+dropped 0.9s to 0.5s, because it is no longer the feedback for why you fell.
+
+**A catch is a reaction test and not an aiming test, and that was the wall's geometry
+rather than a choice.** A fall from a route stance lasts 0.62s, and a catch is
+available on every frame of every fall — 11.9 reachable holds per frame on level 1,
+6.0 on level 5. You fall past everything you were climbing. What it still asks for is
+touching *near a hold near your body*: a panicked touch in the corner of the screen
+extends the nearest hand toward it, finds nothing, and you keep falling.
+
+**The honest cost is that `PUMPED OUT` is now survivable.** Nearly every catch is a
+catch from an empty bar, so a catch has to hand some back or the save is undone on the
+next frame — it is worth 0.2. From there, hanging off one arm with no feet, you have
+2.7s (level 5) to 4.1s (level 1) and it never recovers on its own; getting one foot
+back on costs about one human move and turns that into a rest 61% of the time on level
+1 and 14% on level 5; re-making the whole stance is a rest 98% of the time on level 1
+and 59% on level 5. So the reprieve has a deadline, and the ladder's own gradient runs
+straight through it. `npm run catch` measures both halves of this.
+
+But stamina is the pacing mechanic, and running out of it now costs a few seconds and
+a re-established stance rather than the attempt. That was the trade the request asked
+for, and the refund is a slider if it turns out to be too generous.
 
 ### Still open
 

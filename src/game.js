@@ -1,7 +1,8 @@
 /**
  * Game state, camera and the drag interaction.
  *
- * The state machine is menu -> building -> climbing -> (falling | topped) -> menu.
+ * The state machine is menu -> building -> climbing -> (falling -> landed | topped)
+ * -> menu, with one edge going backwards: falling -> climbing, which is a catch.
  * The menu is what loads first and it's where both endings put you, so a wall only
  * exists once a problem has been picked -- `wall` and `fig` are null in the menu, and
  * both the update and the draw path have to tolerate that.
@@ -10,6 +11,13 @@
  * TOP_HOLD_TIME. Bouldering's own rule is that you have to control the top rather
  * than slap it, and the delay does a second job -- a wobble that carries a hand
  * through the finish hold on the way somewhere else isn't a send.
+ *
+ * COMING OFF IS NOT THE END OF THE ATTEMPT -- hitting the ground is. While you are
+ * in the air you can still drag a hand onto a hold and latch it (`catchHold`), which
+ * puts you straight back into `climbing` hanging off one arm. Only when the figure
+ * reaches the floor does the attempt close, and then FALL_LINGER runs and the menu
+ * comes back. So `falling` is a playable state and `landed` is the terminal one, and
+ * the difference matters to input: a fall wants your finger, a landing does not.
  *
  * `building` exists because generating a wall runs the body solver a few thousand
  * times (~250ms on a laptop, more on a phone). Doing that synchronously inside
@@ -35,6 +43,10 @@
  *    all. Each limb being individually reachable isn't enough: plant four one at
  *    a time, with the body moving in between, and you can assemble a combination
  *    no body can hold, which the solver then renders as a stretched wreck.
+ *  - Mid-fall, all of the above still applies except TAP_SLOP: touching a hand
+ *    starts steering it immediately. There is no tap-to-release to disambiguate
+ *    from (nothing is planted while you're in the air) and no half-second to spend
+ *    travelling five units before the rings come up.
  */
 
 import { T } from './tuning.js';
@@ -73,7 +85,9 @@ export function createGame(canvas) {
     stam: createStamina(),
     cam: { y: 0 },
     accum: 0, // fixed-timestep reservoir
-    state: 'menu', // menu | building | climbing | falling | topped
+    // menu | building | climbing | falling | landed | topped. `falling` is playable
+    // -- see catchHold -- and `landed` is where an attempt actually ends.
+    state: 'menu',
     level: 0, // index into T.LEVELS
     problem: 0, // which of that level's problems
     buildFrames: 0,
@@ -207,9 +221,25 @@ export function createGame(canvas) {
         if (pick) game.startProblem(pick.level, pick.index);
         return;
       }
-      // Ignore input while building and while falling. Falling matters: a finger
-      // still down as the fall plays out must not have its touch land on the menu
-      // that replaces it and start a level the player never chose.
+      // A fall is playable, so it takes input -- but only ever a hand onto a hold.
+      // No TAP_SLOP here: nothing is planted, so there is no tap-to-release for a
+      // travel threshold to disambiguate from, and half a second is not long enough
+      // to spend five units of it proving you meant it.
+      if (game.state === 'falling') {
+        const world = game.screenToWorld(screenPt);
+        // No GRAB_RADIUS either: any touch takes a hand, the nearest one. Hunting
+        // for a limb is the one thing half a second cannot afford, and the verb
+        // survives it -- the hand reaches toward wherever your finger is, so
+        // touching the hold you want IS the gesture.
+        const limb = pickLimb(game.fig, world, { kind: 'hand', radius: Infinity });
+        if (!limb) return; // both hands already have a finger on them
+        limb.drag = { pointerId: id, target: { x: world.x, y: world.y } };
+        game.pointers.set(id, { down: world, limbId: limb.id, dragging: true });
+        return;
+      }
+      // Ignore input while building, while on the floor, and while topping out. The
+      // floor matters: a finger still down as the result plays out must not have its
+      // touch land on the menu that replaces it and start a level nobody chose.
       if (game.state !== 'climbing') return;
 
       if (hitsRect(menuButtonRect(game.view), screenPt)) {
@@ -247,6 +277,9 @@ export function createGame(canvas) {
       const p = game.pointers.get(id);
       game.pointers.delete(id);
       if (!p || !p.limbId) return;
+      // The state can have moved on under a finger that was already down -- you
+      // land, or you top out mid-drag -- and neither of those wants a hold planted.
+      if (game.state !== 'climbing' && game.state !== 'falling') return;
 
       const limb = game.fig.limbs[p.limbId];
 
@@ -268,7 +301,9 @@ export function createGame(canvas) {
       // a single frame, where no update has run to fill it in yet.
       const { take } = refreshTargets(game, limb);
       limb.drag = null;
-      if (take) limb.hold = take;
+      if (!take) return;
+      if (game.state === 'falling') catchHold(game, limb, take);
+      else limb.hold = take;
     },
   };
 
@@ -470,12 +505,27 @@ function refreshTargets(game, limb) {
   return drag;
 }
 
-/** Closest limb endpoint to the touch, if one is close enough to mean it. */
-function pickLimb(fig, world) {
+/**
+ * Closest limb endpoint to the touch, if one is close enough to mean it.
+ *
+ * `kind` and `radius` are both for the mid-fall catch, and both narrow or widen for
+ * the same reason -- that a fall is about half a second long.
+ *
+ * Hands only: `supported()` wants a hand on the wall, so a foot latched in mid-air
+ * buys exactly the time it takes TOPPLE_BUDGET to run out and then drops you again.
+ * Offering it would be offering a move that cannot work.
+ *
+ * And no distance limit, where climbing has GRAB_RADIUS. On the wall that radius is
+ * what stops a stray touch hauling a limb you didn't mean; mid-air there is no other
+ * thing a touch could mean, and making the player find a hand first is how the window
+ * gets spent.
+ */
+function pickLimb(fig, world, { kind = null, radius = T.GRAB_RADIUS } = {}) {
   let best = null;
-  let bestD = T.GRAB_RADIUS;
+  let bestD = radius;
   for (const id of LIMB_IDS) {
     const limb = fig.limbs[id];
+    if (kind && limb.kind !== kind) continue;
     if (limb.drag) continue; // already owned by another pointer
     const d = Math.hypot(limb.pos.x - world.x, limb.pos.y - world.y);
     if (d < bestD) {
@@ -562,8 +612,19 @@ export function update(game, dt) {
     game.fallTimer += dt;
     if (game.fallTimer > T.TOP_LINGER) game.showMenu();
   } else if (game.state === 'falling') {
-    // Watch yourself come off for a beat -- that's the feedback for *why* you
-    // fell -- then straight back to the menu, carrying the result with you.
+    // You are in the air and it is still your move: a hand dragged onto a hold
+    // catches you. So the rings have to be live here for exactly the reason they
+    // are live while climbing -- they are the only thing saying what a release will
+    // do, and mid-fall that is the difference between the attempt continuing and
+    // not. Same function, same answer, nothing cheaper.
+    for (const id of LIMB_IDS) {
+      if (fig.limbs[id].drag) refreshTargets(game, fig.limbs[id]);
+    }
+    // `grounded` is set by stepFigure, which has already run this frame.
+    if (fig.grounded) touchDown(game);
+  } else if (game.state === 'landed') {
+    // On the floor: this is where an attempt actually ends. A beat to register it,
+    // then back to the menu carrying the result.
     game.fallTimer += dt;
     if (game.fallTimer > T.FALL_LINGER) {
       game.last = {
@@ -624,16 +685,96 @@ function topOut(game) {
   for (const id of LIMB_IDS) game.fig.limbs[id].drag = null;
 }
 
+/**
+ * Come off the wall. This ends the STANCE, not the attempt -- see catchHold.
+ *
+ * Fingers already down are deliberately NOT cleared, and this is the fiddliest part
+ * of the whole feature. The fall is about half a second off the top of a problem and
+ * it is now the most time-critical thing in the game, so making the player lift a
+ * finger and put it back down before they may reach for anything would spend most of
+ * the window on ceremony. So each pointer is carried across, converted to what it
+ * would mean in the air:
+ *
+ *  - a HAND mid-drag keeps its drag, and its finger keeps steering it;
+ *  - a HAND merely touched (never past TAP_SLOP) is promoted to a drag where it sits,
+ *    because mid-air a touch on a hand has no other meaning -- the same reason
+ *    TAP_SLOP is off in `pointerDown`;
+ *  - a FOOT loses its drag, since feet don't catch (see pickLimb) and a live drag
+ *    would ring holds it cannot take. Its pointer is neutralised rather than deleted,
+ *    so lifting that finger does nothing instead of doing something wrong.
+ */
 function beginFall(game, reason) {
+  const { fig } = game;
   game.state = 'falling';
   game.fallReason = reason;
   game.fallTimer = 0;
-  game.fig.falling = true; // solver stops constraining; gravity takes over
-  for (const id of LIMB_IDS) {
-    game.fig.limbs[id].hold = null;
-    game.fig.limbs[id].drag = null;
+  fig.falling = true; // solver stops constraining; gravity takes over
+  fig.grounded = false;
+  // The base-of-support bar is drawn from this and the falling branch of stepFigure
+  // never rewrites it, so a stale one would hang in the air under a falling figure.
+  fig.balance = null;
+  for (const id of LIMB_IDS) fig.limbs[id].hold = null;
+
+  for (const [id, p] of game.pointers) {
+    const limb = p.limbId ? fig.limbs[p.limbId] : null;
+    if (!limb) continue;
+    if (limb.kind === 'foot') {
+      limb.drag = null;
+      p.limbId = null;
+    } else if (!p.dragging) {
+      p.dragging = true;
+      limb.drag = { pointerId: id, target: { x: p.down.x, y: p.down.y } };
+    }
   }
+}
+
+/** Hit the floor. The attempt is over here, and not a moment before. */
+function touchDown(game) {
+  game.state = 'landed';
+  game.fallTimer = 0;
+  for (const id of LIMB_IDS) game.fig.limbs[id].drag = null;
   game.pointers.clear();
+}
+
+/**
+ * Latch a hold in mid-air, and carry on climbing.
+ *
+ * This is the whole point of the fall being playable: coming off is a mistake to
+ * recover from rather than a verdict. The gate is the ordinary one -- `refreshTargets`
+ * decided this hold, which means `canReach` and `stanceSolvable` both said yes from
+ * where the body is at the instant you let go -- so a catch is not a special grab
+ * with looser rules. It just happens on a body that is moving.
+ *
+ * Velocity is deliberately NOT zeroed. It survives exactly one substep before the
+ * reach clamp hauls the body inside the arm and the momentum is re-derived from
+ * where the body actually ended up, so it is self-limiting, and that one substep is
+ * the jerk of catching something.
+ *
+ * Stamina is the part that needs a decision. You are almost always here because you
+ * were empty, and a catch that hands back nothing is a half-second reprieve followed
+ * by an identical fall -- PUMPED OUT fires again on the very next frame. So a catch
+ * is worth CATCH_STAMINA, if you had less. That is not a free reset: you land on one
+ * arm with no feet, which is about the most expensive stance on the wall, so the
+ * sliver drains unless you get your feet back on quickly. And a fall costs the height
+ * you fell, which no amount of catching gives back.
+ */
+function catchHold(game, limb, hold) {
+  const { fig } = game;
+  limb.hold = hold;
+  limb.drag = null;
+  fig.falling = false;
+  fig.grounded = false;
+  // Every clock the fall's own endings run on is stale now. `lostFor` especially:
+  // if the reason was CAME OFF then it is sitting above FALL_VIOLATION_TIME, and
+  // left alone it would drop you again the first frame the new stance is anything
+  // other than perfect.
+  fig.lostFor = 0;
+  fig.violation = 0;
+  fig.topple = 0;
+  fig.wedgeSpent = 0;
+  game.state = 'climbing';
+  game.fallTimer = 0;
+  game.stam.value = Math.max(game.stam.value, T.CATCH_STAMINA);
 }
 
 export function render(game) {

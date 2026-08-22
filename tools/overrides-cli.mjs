@@ -1,5 +1,5 @@
 /**
- * The Node half of `--set` / `--preset` for the seven headless tools.
+ * The Node half of `--set` / `--preset` for the headless tools.
  *
  * Split from src/overrides.js because that module must stay browser-loadable (the
  * game and the tuner page both import it) and reading a preset file needs `fs`.
@@ -13,7 +13,7 @@
  *
  * Two rules here are load-bearing:
  *
- *  - **Call it ABOVE `dayArg`.** All seven tools evaluate
+ *  - **Call it ABOVE `dayArg`.** Every tool evaluates
  *    `const DAY = dayArg(process.argv, T.REF_DAY)` at module scope, so anything
  *    overriding a constant that a module-scope const reads has to run first.
  *  - **Shout, in the header and the footer.** These tools' output gets pasted into

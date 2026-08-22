@@ -162,7 +162,7 @@ export function describeOverrides(values) {
 /**
  * `--set PATH=VALUE` off a command line, repeatable. The dayArg precedent in
  * src/day.js is the model: a CLI concern that lives in src/ because the game, the
- * tuner and all seven tools have to agree what a path means.
+ * tuner and every headless tool have to agree what a path means.
  *
  * Values are parsed as JSON first so `--set STYLES.1.pull=0.7` and
  * `--set COL.text='"#fff"'` both work, falling back to the raw string.

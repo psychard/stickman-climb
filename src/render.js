@@ -933,6 +933,26 @@ function drawHud(ctx, game) {
     ctx.textAlign = 'left';
   }
 
+  // Coming off the wall no longer ends the attempt -- hitting the ground does -- so
+  // the fall has to say which of the two is happening. The reason is why the stance
+  // failed; the line under it is the only place the catch is taught, and it is drawn
+  // only while there is still air under you, so it disappears exactly when it stops
+  // being true. Kept high on the screen: the camera lags a fast fall, so the figure
+  // sits low, and this is the one moment the player is reading holds under pressure.
+  if (game.state === 'falling' || game.state === 'landed') {
+    const cx = view.ox + view.playW / 2;
+    ctx.textAlign = 'center';
+    ctx.font = '600 26px ui-monospace, monospace';
+    ctx.fillStyle = T.COL.stamLo;
+    ctx.fillText(game.fallReason, cx, view.h * 0.28);
+    if (game.state === 'falling') {
+      ctx.font = '12px ui-monospace, monospace';
+      ctx.fillStyle = T.COL.text;
+      ctx.fillText('drag a hand onto a hold', cx, view.h * 0.28 + 22);
+    }
+    ctx.textAlign = 'left';
+  }
+
   if (game.state === 'topped') {
     ctx.textAlign = 'center';
     ctx.font = '600 34px ui-monospace, monospace';

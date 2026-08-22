@@ -279,7 +279,21 @@ export const T = {
   // recovery, so a stance being fixed is never mistaken for one being lost.
   FALL_VIOLATION: 30,
   FALL_VIOLATION_TIME: 0.3,
-  FALL_LINGER: 0.9, // seconds watching yourself fall before the retry overlay
+  // Seconds of lying on the ground before the menu comes back. This used to be the
+  // whole of the fall -- 0.9s of watching yourself drop, with nothing to do -- and
+  // it is now only the beat AFTER you land, because the fall itself is playable: a
+  // hand dragged onto a hold catches you (see catchHold in game.js). So the linger
+  // no longer has to be long enough to read as feedback on its own, and shorter is
+  // better, since by the time you are on the floor you already know what happened.
+  FALL_LINGER: 0.5,
+  // What a catch hands back, if you had less. A catch is nearly always a catch from
+  // PUMPED OUT, so without this it is a half-second reprieve and a second fall: the
+  // bar is at zero, and the frame after you latch the hold it drops you again for
+  // the same reason. This is deliberately a sliver rather than a refill -- enough to
+  // hang off one arm and get your feet back on, not enough to carry on climbing from
+  // where you left off. It does not make falling free, because a fall costs the
+  // height you fell, which is the direction that matters.
+  CATCH_STAMINA: 0.2,
   // How decisive the outboard test must be before a joint may switch bend side.
   // Near zero the limb is pointing sideways and the test is meaningless, so the
   // previous side is kept -- otherwise knees snap mid-move.

@@ -26,8 +26,9 @@ It is dev-only by construction and contributes 0.2 kB to a build. See
 
 Working and verified: draggable limbs with multitouch, reach limits with body
 lunge, anatomical pose limits, geometric load distribution, stamina with rest and
-recovery, falling, a balance limit once both hands are off the wall, scrolling
-camera, seeded walls that are climbable by construction, thirty short boulder problems in six styles across five difficulties
+recovery, falling — **which you can now catch yourself out of, so the attempt ends at
+the ground rather than the moment you come off** — a balance limit once both hands are
+off the wall, scrolling camera, seeded walls that are climbable by construction, thirty short boulder problems in six styles across five difficulties
 **regenerated every day from the local date**, top-outs matched with both hands,
 ticks that reset each midnight and are kept per day, and reach rings that run the
 real grab rather than an approximation of it. Frame cost ~0.3ms of a 16.7ms
@@ -62,6 +63,9 @@ Standing decisions, so they don't get relitigated by accident:
 | **The reach affordance is rings on the holds, not a reach envelope.** A translucent `spec.max` disc around the socket was drawn and removed: a grab is gated on `canReach` (pose cone and a minimum distance too) and the body moves under the drag, so the disc drew a boundary that was neither the real limit nor a useful one. | Settled — don't reinstate the disc |
 | **A ring is a promise, so it runs the real grab.** The renderer used to test its own cheap version and disagreed with the release on 40% of the rings it drew. One hold is drawn bright — the one a release takes — rather than every hold that is merely close. | Settled — replaced the distance-band ring |
 | **Falling returns to the menu**, carrying the reason and height with it. There is no separate retry screen. | Settled |
+| **Coming off is not the end of the attempt; hitting the ground is.** While you are in the air you can still drag a hand onto a hold and latch it, which puts you back into `climbing` hanging off one arm. `FALL_LINGER` runs when you land, not when you come off. | Settled — replaced "a fall is a verdict" |
+| **A catch is the ordinary grab.** Same `refreshTargets`, so the same `canReach`, pose cone and `stanceSolvable`, and the same rings. What is relaxed is only what a fall makes meaningless: `TAP_SLOP`, `GRAB_RADIUS`, and hands-only. | Settled — see [Coming off the wall is not the end of the attempt](#coming-off-the-wall-is-not-the-end-of-the-attempt) |
+| **A catch hands back `CATCH_STAMINA`, and that makes `PUMPED OUT` survivable.** Almost every catch is a catch from empty, so with no refund the save is undone on the next frame. The cost is that the pacing mechanic is softer than it was; the knob is a slider and 0 is the coherent other end. | Tolerated, not settled — it is the price of the ask |
 | **Offline is a cached shell, and an update is offered rather than applied.** A new build waits behind a band on the menu until it's tapped; nothing reloads mid-climb. | Settled |
 | **A wall is a short problem with a top**, not an endless climb: ~430u, ended by matching a finish hold with both hands. Six per level, in styles (traverse, foot match, reachy...), ticked off when topped. | Settled — replaced the endless wall |
 | **Two limbs may share a hold.** Always legal in the sim; now something the generator asks for, in the foot match and in every top-out. | Settled |
@@ -83,6 +87,7 @@ its Revisions section records what changed and why.
 npm run dev      # Vite dev server on :5173, bound to 0.0.0.0
 npm run verify   # prove generated walls are climbable (static solve), 7 days x 30
 npm run sim      # headless auto-climber (live solver): plant rate, jitter, invariants
+npm run catch    # can you catch a fall, and what does a catch buy you?
 npm run measure  # what the biophysics model actually does, in numbers
 npm run ladder   # are the five levels actually five difficulties? (read `human`)
 npm run fuzz     # haul 3 limbs at once to absurd places; can the body be broken?
@@ -131,8 +136,8 @@ for a longer sweep); everything else pins `T.REF_DAY` so its numbers are compara
 run to run. All of them take `--day=YYYYMMDD` or `--day=today`. See
 [A new set every day](#a-new-set-every-day).
 
-`verify`, `sim`, `fuzz` and `jitter` answer "is it broken?"; `measure` and `ladder`
-answer "what does it do?". `sim` plays cooperatively and `fuzz` plays adversarially,
+`verify`, `sim`, `fuzz` and `jitter` answer "is it broken?"; `measure`, `ladder` and
+`catch` answer "what does it do?". `sim` plays cooperatively and `fuzz` plays adversarially,
 and they catch different things — the whole multi-limb-drag regime was unmeasured
 until `fuzz` existed, and it was badly broken.
 
@@ -187,8 +192,8 @@ from a fork has no business borrowing the credentials that publish the site.
 The two triggers don't overlap: `pages.yml` owns push-to-`main`, `ci.yml` owns
 pull requests, so nothing deploys twice.
 
-**Only `verify` and `build` run in CI** — not `sim`, `fuzz`, `jitter`, `ladder` or
-`measure`, and not `tune:check`. Those are the tuning harness: they are pinned to
+**Only `verify` and `build` run in CI** — not `sim`, `fuzz`, `jitter`, `ladder`,
+`measure` or `catch`, and not `tune:check`. Those are the tuning harness: they are pinned to
 `T.REF_DAY`, several report numbers rather than pass/fail, and their thresholds are
 calibrated against distributions that move whenever the solver does. `verify` is the
 one check whose subject is the walls players are about to be handed. So a solver
@@ -650,6 +655,107 @@ ended up above the chest. The same predicate gates three places, and all three
 matter: `canReach` (you can't grab it), the solver (you can't drift into it), and
 `stanceFeasible` (routes never demand it).
 
+### Coming off the wall is not the end of the attempt
+
+Falling used to be a verdict: every rule above ended in `beginFall`, which cleared
+your holds, ran gravity for `FALL_LINGER` and put you back on the menu. It is now a
+**state you can play out of** — drag a hand onto a hold while you are in the air and
+you latch it (`catchHold`), which puts you straight back into `climbing` hanging off
+one arm. The attempt ends when the figure reaches the **ground**, and only then does
+the linger run. So `falling` is playable and `landed` is terminal, and the state
+machine grew one backwards edge: `falling → climbing`.
+
+**A catch is the ordinary grab, on a body that happens to be moving.** It goes through
+`refreshTargets`, so `canReach`, the pose cone and `stanceSolvable` all still gate it
+and the rings still draw the same answer the release takes. There was no temptation to
+loosen that: the ring being a promise matters *more* here than on the wall, because
+mid-air it decides whether the attempt continues.
+
+Four things were decided by measurement rather than by taste:
+
+- **It is a reaction test, not an aiming test, and that is the fall's own geometry.**
+  `npm run catch` measures it: a fall off a route stance lasts 0.62s (0.30s low on the
+  wall, 0.98s off the top), and a catch is available on **100% of the frames of 100% of
+  falls** — 11.9 reachable holds per frame on level 1, down to 6.0 on level 5. The wall
+  is covered in holds and you fall past all of them, so nothing was going to make this
+  a question of precision. What it *does* still require is touching near a hold near
+  your body: a panicked touch in the corner of the screen extends the nearest hand
+  toward it, finds nothing within `SNAP_RADIUS`, and you keep falling.
+- **Feet don't catch**, and `pickLimb` won't offer one. `supported()` wants a hand on
+  the wall, so a foot latched in mid-air buys exactly the time it takes
+  `TOPPLE_BUDGET` to run out and then drops you again — a move that cannot work.
+- **`TAP_SLOP` and `GRAB_RADIUS` are both off.** Mid-air there is nothing else a touch
+  could mean: nothing is planted, so there is no tap-to-release to disambiguate a
+  travel threshold from, and no other limb a stray touch could be hauling. Both exist
+  to protect the climbing verb from ambiguity and both would be spending the window on
+  ceremony. The upshot is that a single **tap on a hold** is a catch, which is the
+  gesture a panicking thumb actually makes.
+- **Fingers already down are carried across the transition**, converted to what they
+  would mean in the air, which is the fiddliest part of the feature. Half a second is
+  not long enough to make somebody lift and re-press before they may reach for
+  anything. A hand mid-drag keeps its drag; a hand merely *touched* — down, never past
+  `TAP_SLOP` — is promoted to a drag where it sits, since mid-air that touch has no
+  other meaning; a foot loses its drag and its pointer is neutralised rather than
+  deleted, so lifting that finger does nothing rather than something wrong. Note the
+  rings appear one frame later than the promotion, because `beginFall` and the falling
+  branch of `update` are in the same `if`/`else` chain — `render.js` already guards on
+  `l.drag && l.drag.reach` and so draws nothing on that frame.
+
+**`CATCH_STAMINA` is the one part of this that is a design decision and not a
+mechanism.** Nearly every catch is a catch from `PUMPED OUT` — the bar is at zero, so
+without a refund the save is undone on the very next frame and the whole mechanic is a
+half-second reprieve followed by an identical fall. So a catch is worth 0.2 of the bar,
+if you had less. Measured from there, on the median stance:
+
+| entering the stance at 0.2 and doing nothing | L1 | L3 | L5 |
+|---|---|---|---|
+| latched: one hand, no feet | 0% last, 4.1s | 0%, 3.5s | 0%, 2.7s |
+| one foot recovered | 61% last | 42% | 14% |
+| the whole stance re-made | 98% last | 91% | 59% |
+
+"Last" is still on the wall after 15s; the seconds are the median of the ones that
+aren't. A human move is ~1.83s (see [Stamina and load](#stamina-and-load)), so **the
+first foot is one move and the whole stance is three** — a latched hang never recovers
+and gives you between two and one move's worth of runway, so the cheap move has to come
+first, and even the full stance is only a rest 59% of the time on level 5. The gradient
+across the ladder is the existing one: on level 1 a catch is a recovery, on level 5 it
+is a scrabbling descent.
+
+`npm run catch` prints both halves of this, and reports the recovering **fraction**
+rather than a median of seconds on purpose — that distribution is bimodal (a stance is
+either above `REST_STRAIN` and empties in seconds or below it and refills), so a median
+lands wherever the mode boundary happens to fall and swung by 6s between samples while
+this was being written. The fraction is the statistic `measure` already uses, for the
+same reason.
+
+**Be clear about what that costs, because it is real: `PUMPED OUT` is now
+survivable.** A fast reaction catches you a few units below where you came off, so the
+punishment for emptying the bar is no longer the attempt but a few seconds and a
+re-established stance — and stamina is the pacing mechanic and most of the difficulty
+ladder. The knob is a slider, and `CATCH_STAMINA: 0` is the coherent other end of it
+(you can still catch a `CAME OFF` or an `OFF BALANCE` fall, because those leave you
+with bar remaining; a pumped fall simply re-drops you). This was landed at 0.2 because
+the ask was that coming off should not immediately spell the end.
+
+**The ground had to become load-bearing.** A fall used to run for a fixed 0.9s and it
+did not matter where the body was when that expired. Now it runs as long as the height
+it started from, so the falling branch of `stepFigure` stops the figure **on** the
+floor — measured at the feet, not the hip, since the limbs hang a leg's length below it
+— zeroes its velocity, and sets `fig.grounded`, which is what `update` starts
+`FALL_LINGER` on. `FALL_LINGER` dropped 0.9 → 0.5 in the same change: it is no longer
+the feedback for *why* you fell, only a beat to register that you are on the floor.
+
+Two smaller things that were bugs waiting to happen:
+
+- **`fig.balance` is cleared on the way into a fall.** The falling branch returns
+  before `balanceOf` runs, so the base-of-support bar would otherwise hang in the air
+  under a falling figure, drawn from the stance that dropped you.
+- **`catchHold` resets `lostFor`.** If the fall was `CAME OFF` then that clock is
+  sitting above `FALL_VIOLATION_TIME`, and left alone it would drop you again the
+  first frame the new stance was anything other than perfect. Velocity is deliberately
+  *not* reset: it survives exactly one substep before the reach clamp hauls the body
+  in under the hold, which is the jerk of catching something.
+
 ### Two solver traps, both already hit
 
 **Gravity is positional while you're on the wall, not an acceleration.** The body
@@ -1063,7 +1169,7 @@ clean.
 **The tools split two ways, and the split matters.** `verify` sweeps *real* days —
 `npm run verify` walks today plus the next six, 210 problems, because it is the gate
 in front of a deploy and what it should defend is the walls players are about to be
-handed. Everything else (`measure`, `ladder`, `sim`, `fuzz`, `jitter`) pins
+handed. Everything else (`measure`, `ladder`, `sim`, `fuzz`, `jitter`, `catch`) pins
 `T.REF_DAY`, because they are the tuning harness and a plant rate you cannot compare
 against yesterday's tells you nothing about the constant you just changed — and
 because `fuzz` prints a seed to replay, which a wall that changed overnight would
@@ -1168,7 +1274,8 @@ without adding a second difficulty system. It has not been tried.
 
 ## Menu and difficulty
 
-The state machine is `menu → building → climbing → (falling | topped) → menu`. The
+The state machine is `menu → building → climbing → (falling → landed | topped) →
+menu`, plus one backwards edge — `falling → climbing`, which is a catch. The
 menu loads first, so **`game.wall` and `game.fig` are null until a problem is
 picked** — both the update and the draw path have to tolerate that. Both endings
 return to the menu carrying `game.last`, so the grid doubles as the result screen;
