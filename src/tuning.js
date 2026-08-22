@@ -244,13 +244,13 @@ export const T = {
 
   // Elasticity in reach: past max the limb keeps moving, but with exponential
   // resistance, asymptotically capped at max + REACH_STRETCH. Tight, on purpose.
-  REACH_STRETCH: 9,
+  REACH_STRETCH: 6.5,
 
   DANGLE_LERP: 0.22, // how fast an unplanted limb settles to hanging
 
   // ----------------------------------------------------------------- input ---
   GRAB_RADIUS: 42, // how close a pointer must land to pick up a limb
-  SNAP_RADIUS: 34, // how close the limb endpoint must be to a hold to plant
+  SNAP_RADIUS: 45, // how close the limb endpoint must be to a hold to plant
   PLANT_TOLERANCE: 1.0, // multiple of max reach still allowed to plant
   // A grab is refused if the resulting four-hold stance has no solution at all --
   // see stanceSolvable. Legal stances settle at ~0-0.6u, and the configurations
@@ -279,11 +279,11 @@ export const T = {
   // recovery, so a stance being fixed is never mistaken for one being lost.
   FALL_VIOLATION: 30,
   FALL_VIOLATION_TIME: 0.3,
-  FALL_LINGER: 0.85, // seconds watching yourself fall before the retry overlay
+  FALL_LINGER: 0.9, // seconds watching yourself fall before the retry overlay
   // How decisive the outboard test must be before a joint may switch bend side.
   // Near zero the limb is pointing sideways and the test is meaningless, so the
   // previous side is kept -- otherwise knees snap mid-move.
-  BEND_HYSTERESIS: 0.78,
+  BEND_HYSTERESIS: 0.735,
 
   // ---------------------------------------------------------------- stamina ---
   // Strain is a single 0..~2 scalar built from three signals. Below REST_STRAIN
@@ -300,7 +300,7 @@ export const T = {
   W_HOLD: 0.35,
   W_FLEX: 0.4,
   W_BALANCE: 0.45,
-  W_ARMLOAD: 0.45, // cost of simply having weight on your arms
+  W_ARMLOAD: 0.445, // cost of simply having weight on your arms
   // Calibrated against the measured spread of real problem stances on level 1, which
   // on REF_DAY runs p25 0.19 / median 0.28 / p90 0.37. Roughly the best 50% of
   // positions on the easiest level offer a rest, falling to 13% on the hardest -- see
@@ -355,7 +355,7 @@ export const T = {
     ARM: { straight: 0.92, folded: 0.42 },
     LEG: { straight: 0.9, folded: 0.45 },
   },
-  FLEX_EXP: 1.6,
+  FLEX_EXP: 1.64,
 
   FOOT_STRAIN_MULT: 0.4, // legs are much stronger than arms
   // ...but that discount is muscular, and the `hold` term is not. With no hand on
@@ -368,7 +368,7 @@ export const T = {
   // because the terms that vanish when the last hand comes off are exactly the ones
   // a weight scales. It rides on hold quality, so a no-hands stance on level 1 jugs
   // is still the genuine rest it should be and one on level 5 crimps is not.
-  NOHANDS_FOOT_GRIP: 1.0,
+  NOHANDS_FOOT_GRIP: 1.04,
 
   // Load distribution. Each contact's share of bodyweight comes from how well it
   // opposes gravity and how close the centre of mass sits to it, rather than
@@ -386,7 +386,7 @@ export const T = {
   BALANCE_BASE_SPAN: 55, // loaded-contact spread narrower than this is a narrow base
   BALANCE_NARROW: 1.0, // extra multiplier at maximum narrowness
   BALANCE_MIN_SHARE: 0.08, // a contact carrying less than this doesn't widen the base
-  W_MANTEL: 0.35, // penalty for COM sitting above a loaded hand (pressing)
+  W_MANTEL: 0.365, // penalty for COM sitting above a loaded hand (pressing)
 
   // ------------------------------------------------------------------ holds ---
   HOLD_R_MIN: 3.5, // radius of a 0-quality crimp
@@ -620,7 +620,7 @@ export const T = {
 
   // ----------------------------------------------------------------- camera ---
   CAM_ANCHOR: 0.58, // figure sits this far down the screen
-  CAM_LERP: 6, // follow stiffness (per second)
+  CAM_LERP: 5, // follow stiffness (per second)
 
   // ------------------------------------------------------------------- theme ---
   COL: {
