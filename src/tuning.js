@@ -369,7 +369,7 @@ export const T = {
     ARM: { straight: 0.92, folded: 0.42 },
     LEG: { straight: 0.9, folded: 0.45 },
   },
-  FLEX_EXP: 1.64,
+  FLEX_EXP: 1.6,
 
   FOOT_STRAIN_MULT: 0.4, // legs are much stronger than arms
   // ...but that discount is muscular, and the `hold` term is not. With no hand on
@@ -382,7 +382,7 @@ export const T = {
   // because the terms that vanish when the last hand comes off are exactly the ones
   // a weight scales. It rides on hold quality, so a no-hands stance on level 1 jugs
   // is still the genuine rest it should be and one on level 5 crimps is not.
-  NOHANDS_FOOT_GRIP: 1.04,
+  NOHANDS_FOOT_GRIP: 1.0,
 
   // Load distribution. Each contact's share of bodyweight comes from how well it
   // opposes gravity and how close the centre of mass sits to it, rather than
@@ -524,7 +524,7 @@ export const T = {
     { name: 'ROOF', blurb: 'crimps, no rests', floor: 0.7, seed: 155317 },
     { name: 'PROJECT', blurb: 'nothing given away', floor: 1.0, seed: 262147 },
   ],
-  MOVE_DIST: { easy: 52, hard: 84 }, // target reach per move, lerped by difficulty
+  MOVE_DIST: { easy: 58, hard: 84 }, // target reach per move, lerped by difficulty
 
   // ------------------------------------------------------------- problems ---
   // Each level holds this many separate boulder problems, and a problem is SHORT:
@@ -601,11 +601,11 @@ export const T = {
   // there may be no legal right-hand move until the right foot has moved, and no
   // legal right-foot move until the left foot has. See `npm run ladder`, which
   // reports how many moves are available per stance.
-  REUSE: { easy: 0.0, hard: 0.97 },
-  REUSE_RANGE: 1.25, // how far past the target move distance to look, as a multiple
-  REUSE_GAIN: 0.3, // ...and the minimum height gain, likewise
+  REUSE: { easy: 0.3, hard: 0.98 },
+  REUSE_RANGE: 1.4, // how far past the target move distance to look, as a multiple
+  REUSE_GAIN: 0.2, // ...and the minimum height gain, likewise
   REUSE_TRIES: 10, // feasibility solves per reuse attempt, best-first
-  MOVE_SPREAD: 48, // lateral jitter when sampling candidates
+  MOVE_SPREAD: 55, // lateral jitter when sampling candidates
   // The route is a random walk, which left alone hugs the centre of the wall and
   // stacks on itself. A slow lateral drift makes it traverse and use the width.
   MOVE_DRIFT: { amp: 0.2, period: 900, pull: 0.3 },
