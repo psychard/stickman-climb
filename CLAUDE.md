@@ -61,6 +61,7 @@ Standing decisions, so they don't get relitigated by accident:
 | **With no hand on the wall your weight has to be over your feet.** A hard cap on how far past the base of support the body can be dragged, and ~0.5s of budget out there before `OFF BALANCE`. Scoped to the no-hands case, which no route stance is ever in. | Settled — replaced "leaning out costs stamina and nothing else" |
 | **Difficulty is one scalar.** A level sets a *floor* under the same easy→hard number the height ramp already drives; there is no second difficulty system. | Settled |
 | **The reach affordance is rings on the holds, not a reach envelope.** A translucent `spec.max` disc around the socket was drawn and removed: a grab is gated on `canReach` (pose cone and a minimum distance too) and the body moves under the drag, so the disc drew a boundary that was neither the real limit nor a useful one. | Settled — don't reinstate the disc |
+| **The camera holds still while a finger is on the screen**, then catches up with a ramped start and the follow's own exponential finish. A wall that scrolls under a reach moves the hold you are aiming at, which makes the ring a promise about a moving target. Scoped to `climbing`: a fall is tracked. | Settled — see [The camera stops while you are touching it](#the-camera-stops-while-you-are-touching-it) |
 | **A ring is a promise, so it runs the real grab.** The renderer used to test its own cheap version and disagreed with the release on 40% of the rings it drew. One hold is drawn bright — the one a release takes — rather than every hold that is merely close. | Settled — replaced the distance-band ring |
 | **Falling returns to the menu**, carrying the reason and height with it. There is no separate retry screen. | Settled |
 | **Coming off is not the end of the attempt; hitting the ground is.** While you are in the air you can still drag a hand onto a hold and latch it, which puts you back into `climbing` hanging off one arm. `FALL_LINGER` runs when you land, not when you come off. | Settled — replaced "a fall is a verdict" |
@@ -1443,6 +1444,34 @@ Six things are load-bearing:
 **opposite directions**: on the level rows red means hard, on the calendar red means
 barely started. Two opposite ramps in one file is the sort of thing that looks like a
 bug later, so both say so at the call site.
+
+### The camera stops while you are touching it
+
+`CAM_LERP` chases the centre of mass every frame, and a reach moves the centre of
+mass — so the wall used to scroll while you were lining up a grab, sliding the hold
+under the ring that was promising it to you. So the follow gain is scaled by
+`game.camEase`, which is driven to 0 while `game.pointers` is non-empty and back to 1
+when the last finger lifts.
+
+Four things about it:
+
+- **It is a gain ramp, not a camera velocity.** `camEase` scales the existing
+  exponential approach, so the catch-up accelerates in (the ramp) and decelerates out
+  (the approach, unchanged), and the whole thing is structurally incapable of
+  overshooting the way a spring would.
+- **Both ends are ramped**, because a finger can land mid-catch-up and an instant
+  stop there is a jerk. The cost is that the freeze is not quite immediate: measured
+  on a route stance high on level 1, a one-second drag lets the camera travel 3.6u,
+  all of it inside `CAM_EASE_OUT`, and it then owes 6.8u which it pays back over
+  ~0.7s.
+- **Any finger counts, not just a drag.** A pointer that has picked no limb is still
+  a thumb resting on the screen, and the complaint is about the wall moving, not
+  about what the finger is doing.
+- **Scoped to `climbing`.** Fingers are deliberately carried across into `falling` so
+  a catch is reachable at all, and a camera frozen through a fall leaves the figure
+  off the bottom of the screen at the one moment the player most needs to see where
+  they are. Measured: with a finger held down through a whole fall the figure drifts
+  from 0.64 to 0.77 of screen height and never leaves it.
 
 ## Coordinates
 

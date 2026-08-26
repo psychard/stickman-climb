@@ -635,6 +635,21 @@ export const T = {
   // ----------------------------------------------------------------- camera ---
   CAM_ANCHOR: 0.58, // figure sits this far down the screen
   CAM_LERP: 5, // follow stiffness (per second)
+  // The camera holds still while any finger is on the screen and catches up once the
+  // last one lifts. The wall scrolling under a reach moves the hold you are aiming
+  // at, which is the one thing a drag cannot afford -- the target ring is a promise
+  // about a hold that is sliding while you read it.
+  //
+  // These two are the ramp on the follow gain either side of the freeze, so neither
+  // the start nor the stop of a pan is a step change. The deceleration at the END of
+  // a catch-up is CAM_LERP's own exponential approach and wants nothing added.
+  //
+  // Measured on a route stance high on level 1: a one-second drag holds the camera to
+  // 3.6u of travel, all of it in the EASE_OUT ramp, and the 6.8u it then owes is paid
+  // back over ~0.7s, peaking mid-way. Held still through a fall on purpose -- see the
+  // follow in game.js.
+  CAM_EASE_IN: 0.5, // seconds from frozen to full follow after the last finger lifts
+  CAM_EASE_OUT: 0.12, // seconds from full follow to frozen when a finger lands
 
   // ------------------------------------------------------------------- theme ---
   COL: {

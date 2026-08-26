@@ -40,6 +40,8 @@ export const GROUPS = [
     keys: [
       'CAM_ANCHOR',
       'CAM_LERP',
+      'CAM_EASE_IN',
+      'CAM_EASE_OUT',
       'GRAB_RADIUS',
       'SNAP_RADIUS',
       'TAP_SLOP',
@@ -132,6 +134,9 @@ export const DESC = {
   // ---------------------------------------------------------------- feel
   CAM_ANCHOR: 'How far down the screen the figure sits. Higher shows more wall above you.',
   CAM_LERP: 'How stiffly the camera chases the figure, per second. Low is floaty, high is locked on.',
+  CAM_EASE_IN:
+    'Seconds for the camera to wind back up to full follow after the last finger lifts. The scroll holds still while you are touching the screen.',
+  CAM_EASE_OUT: 'Seconds for the camera to come to a stop when a finger lands on the screen.',
   GRAB_RADIUS: 'How near a finger must land to a hand or foot to pick it up.',
   SNAP_RADIUS: 'How near the limb must end up to a hold to plant on it when you let go.',
   TAP_SLOP:

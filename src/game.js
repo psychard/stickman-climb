@@ -94,6 +94,10 @@ export function createGame(canvas) {
     fig: null,
     stam: createStamina(),
     cam: { y: 0 },
+    // How much of the camera's follow gain is live, 0..1. Driven to 0 while a finger
+    // is on the screen and back to 1 when the last one lifts, which is what makes the
+    // catch-up accelerate in rather than start with a jolt. See the follow in `update`.
+    camEase: 1,
     accum: 0, // fixed-timestep reservoir
     // menu | building | climbing | falling | landed | topped. `falling` is playable
     // -- see catchHold -- and `landed` is where an attempt actually ends.
@@ -720,6 +724,7 @@ function cameraTarget(game) {
 
 function snapCamera(game) {
   game.cam.y = cameraTarget(game);
+  game.camEase = 1;
 }
 
 export function update(game, dt) {
@@ -813,10 +818,26 @@ export function update(game, dt) {
     }
   }
 
-  // camera follow
+  // Camera follow. It holds still while a finger is down and catches up when the last
+  // one lifts: the holds have to stay put while you are reaching for one, since the
+  // ring is a promise about a hold that would otherwise be sliding as you read it.
+  //
+  // Both ends of the freeze are ramped rather than switched. `camEase` scales the
+  // follow gain, so the catch-up accelerates from rest and the freeze arrives over a
+  // few frames; the deceleration INTO the target is CAM_LERP's exponential approach,
+  // which is what it always was. Ramping the gain rather than moving the camera on a
+  // velocity keeps the whole thing incapable of overshoot.
+  //
+  // Scoped to `climbing` on purpose. While falling there are very often fingers down
+  // -- they are carried across the transition so a catch is reachable at all -- and a
+  // camera frozen through a fall leaves the figure off the bottom of the screen, at
+  // the one moment the player most needs to see where they are.
+  const held = game.state === 'climbing' && game.pointers.size > 0;
+  const per = Math.max(1e-3, held ? T.CAM_EASE_OUT : T.CAM_EASE_IN);
+  game.camEase = Math.max(0, Math.min(1, game.camEase + (held ? -dt : dt) / per));
   const target = cameraTarget(game);
   const k = 1 - Math.exp(-T.CAM_LERP * dt);
-  game.cam.y += (target - game.cam.y) * k;
+  game.cam.y += (target - game.cam.y) * k * game.camEase;
 }
 
 /** Are both hands on the finish hold right now? */
