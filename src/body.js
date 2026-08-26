@@ -82,6 +82,11 @@ export function createFigure(stance) {
       side: def.side,
       hold: null, // the hold object this limb is planted on, or null
       pos: { x: 0, y: 0 }, // rendered endpoint
+      // Velocity of that endpoint, used only by the collapse on landing. Everywhere
+      // else an endpoint is placed kinematically -- it is on a hold, on a pointer, or
+      // lerping to the dangle -- and only a limp limb needs to swing on its own.
+      posV: { x: 0, y: 0 },
+      bendLock: null, // set by the collapse, overriding `bend`; see ikJoint
       drag: null, // { pointerId, target:{x,y} } while being dragged
       bend: undefined, // sticky elbow/knee side, owned by ikJoint
     };
@@ -96,6 +101,12 @@ export function resetToStance(fig, stance) {
     const limb = fig.limbs[id];
     limb.hold = stance[id] || null;
     limb.drag = null;
+    limb.posV.x = 0;
+    limb.posV.y = 0;
+    // Sticky by design, and the collapse pins it from the floor rather than from the
+    // torso frame (see collapseLimbs), so a re-seated figure has to re-decide it.
+    limb.bend = undefined;
+    limb.bendLock = null;
     if (limb.hold) limb.pos = { x: limb.hold.x, y: limb.hold.y };
   }
   fig.falling = false;
@@ -762,32 +773,42 @@ export function stepFigure(fig, dt) {
     // body that keeps accelerating past y = 0 is out of frame long before the game
     // has finished saying where you landed, and the camera can't follow it down
     // because it is clamped to the ground on purpose.
-    if (!fig.grounded) {
-      fig.hipV.y += T.GRAVITY * dt;
-      fig.chestV.y += T.GRAVITY * dt;
-      fig.hip.x += fig.hipV.x * dt;
-      fig.hip.y += fig.hipV.y * dt;
-      fig.chest.x += fig.chestV.x * dt;
-      fig.chest.y += fig.chestV.y * dt;
-      enforceTorso(fig);
-
-      // Landing is measured at the FEET and not at the hip, because the limbs hang
-      // a leg's length below it -- stopping the hip at y = 0 buries them. Both ends
-      // of the torso move by the same correction, so its length and its lean are
-      // whatever the fall left them as; nothing here is trying to pose a landing.
-      const floor = T.GROUND_Y - T.LEG.pref * 0.9;
-      if (fig.hip.y >= floor) {
-        const dy = floor - fig.hip.y;
-        fig.hip.y += dy;
-        fig.chest.y += dy;
-        fig.hipV = { x: 0, y: 0 };
-        fig.chestV = { x: 0, y: 0 };
-        fig.grounded = true;
-      }
+    //
+    // Hitting the floor does not stop the motion, it changes what kind of motion it
+    // is. Nobody who comes off a wall involuntarily lands on their feet, so contact
+    // is where every joint goes limp and the figure collapses -- see collapse() and
+    // collapseLimbs() below. Gravity keeps running either side of that moment; the
+    // difference is that afterwards nothing is holding the body up.
+    fig.hipV.y += T.GRAVITY * dt;
+    fig.chestV.y += T.GRAVITY * dt;
+    if (fig.grounded) {
+      const damp = Math.pow(T.COLLAPSE_DAMP, dt * 120);
+      fig.hipV.x *= damp;
+      fig.hipV.y *= damp;
+      fig.chestV.x *= damp;
+      fig.chestV.y *= damp;
     }
-    // Still run on the frame you land: the limbs settle to hanging over the next
-    // few frames, which is the only thing that reads as coming to rest.
-    placeEndpoints(fig, limbs);
+    fig.hip.x += fig.hipV.x * dt;
+    fig.hip.y += fig.hipV.y * dt;
+    fig.chest.x += fig.chestV.x * dt;
+    fig.chest.y += fig.chestV.y * dt;
+    enforceTorso(fig);
+
+    // Contact is measured at the FEET and not at the hip, because the limbs hang a
+    // leg's length below it -- reading the hip against y = 0 would land you with
+    // your feet through the floor. This is the moment `grounded` marks and the one
+    // the game starts FALL_LINGER on: the fall is over here even though the body is
+    // still moving for another third of a second.
+    if (!fig.grounded && fig.hip.y >= T.GROUND_Y - T.LEG.pref * 0.9) collapse(fig, limbs);
+
+    if (fig.grounded) {
+      restOnFloor(fig);
+      collapseLimbs(fig, limbs, dt);
+    } else {
+      // The limbs settle toward hanging, and a dragged one still follows its finger:
+      // this is the half of the fall you can catch yourself out of.
+      placeEndpoints(fig, limbs);
+    }
     return;
   }
 
@@ -850,6 +871,144 @@ export function stepFigure(fig, dt) {
     fig.topple += dt * (fig.balance.over / T.TOPPLE_REF);
   } else {
     fig.topple = Math.max(0, fig.topple - dt * T.TOPPLE_REARM);
+  }
+}
+
+/**
+ * The moment of impact: go limp.
+ *
+ * This is the whole of "collapse into a pile rather than landing on your feet". The
+ * old landing pinned the hip at standing height and zeroed both velocities, which
+ * left the torso upright and the legs straight underneath it -- a stuck landing, on
+ * a body that had just been dropped. Nothing about coming off a wall involuntarily
+ * produces that pose.
+ *
+ * Three things happen here and each is doing work:
+ *
+ *  - The LIMBS inherit the body's full pre-impact velocity, before it is absorbed.
+ *    They are what actually reads as limp: the arms keep travelling at the speed the
+ *    fall left them, reach the end of their own length, and flop. Absorbing them
+ *    along with the torso is what would make this look like a controlled sit-down.
+ *  - The TORSO keeps COLLAPSE_ABSORB of its velocity. The legs are not holding, but
+ *    they are in the way, so the hips arrive at the floor over a few frames rather
+ *    than in one.
+ *  - The chest is given a sideways kick, because gravity alone will not topple it.
+ *    A vertical torso with both ends in free fall stays vertical -- they fall
+ *    equally, the length constraint holds, and the hip's floor clamp then leaves it
+ *    standing on end, which is the exact pose this replaces. The kick takes the
+ *    direction the body was already going, or its lean if it was going nowhere.
+ */
+function collapse(fig, limbs) {
+  fig.grounded = true;
+  for (const limb of limbs) {
+    limb.posV.x = fig.hipV.x;
+    limb.posV.y = fig.hipV.y;
+  }
+  const keep = T.COLLAPSE_ABSORB;
+  fig.hipV.x *= keep;
+  fig.hipV.y *= keep;
+  fig.chestV.x *= keep;
+  fig.chestV.y *= keep;
+  const dir =
+    Math.abs(fig.chestV.x) > 1
+      ? Math.sign(fig.chestV.x)
+      : fig.chest.x >= fig.hip.x
+        ? 1
+        : -1;
+  if (Math.abs(fig.chestV.x) < T.COLLAPSE_TOPPLE) fig.chestV.x = dir * T.COLLAPSE_TOPPLE;
+}
+
+/**
+ * Stop a limp point at the floor, scrubbing the slide it arrived with.
+ *
+ * `rest` is how far above the ground the point comes to a stop, and it is not the
+ * same for every point, because a body has thickness and the drawing says how much:
+ * the hip and shoulder bars are drawn ACROSS the torso, so a torso lying flat stands
+ * them on end and the line between them rests a bar's half-width up. Without that
+ * the whole figure settles onto one horizontal line at the same y -- flat rather
+ * than piled, with the bars and the head buried in the floor.
+ */
+function land(p, v, rest) {
+  const floor = T.GROUND_Y - rest;
+  if (p.y <= floor) return;
+  p.y = floor;
+  if (v.y > 0) v.y = 0;
+  v.x *= T.COLLAPSE_FRICTION;
+}
+
+/**
+ * Rest the torso on the floor. Clamp, re-enforce the length, clamp again: the
+ * length correction moves both ends, so a single pass can put the end it just fixed
+ * back under the floor -- and a torso lying flat has BOTH ends on it, which is
+ * precisely the case where that happens every substep.
+ *
+ * The shoulders are wider than the hips, so the two rest heights differ by 5 units
+ * and a settled torso lies at 85 degrees rather than exactly flat. That is a slump
+ * rather than a plank, and it costs nothing to get.
+ */
+function restOnFloor(fig) {
+  const hip = T.COLLAPSE_REST + T.HIP_HALF;
+  const chest = T.COLLAPSE_REST + T.SHOULDER_HALF;
+  land(fig.hip, fig.hipV, hip);
+  land(fig.chest, fig.chestV, chest);
+  enforceTorso(fig);
+  land(fig.hip, fig.hipV, hip);
+  land(fig.chest, fig.chestV, chest);
+}
+
+/**
+ * The limbs, once limp. Each endpoint is a free point on a string from its socket:
+ * gravity, then a maximum length, then the floor.
+ *
+ * There is deliberately NO pose cone here, and no minimum length either. Those are
+ * the anatomical stiffness -- they are what keeps a foot from ending up beside a
+ * shoulder while you are climbing -- and a marionette with its strings cut has
+ * neither. A limb may fold up to nothing and may lie anywhere the string reaches.
+ * Nothing downstream reads a pose violation in this state: the attempt is over, and
+ * `fig.violation` is only written by the climbing path.
+ *
+ * The radial velocity is killed when the string goes taut, otherwise the endpoint
+ * spends the rest of the linger trying to leave and skating around the circle.
+ */
+function collapseLimbs(fig, limbs, dt) {
+  const damp = Math.pow(T.COLLAPSE_DAMP, dt * 120);
+  for (const limb of limbs) {
+    const v = limb.posV;
+    v.y += T.GRAVITY * dt;
+    v.x *= damp;
+    v.y *= damp;
+    limb.pos.x += v.x * dt;
+    limb.pos.y += v.y * dt;
+
+    const a = anchorOf(fig.hip, fig.chest, limb);
+    const max = specFor(limb.kind).max;
+    const dx = limb.pos.x - a.x;
+    const dy = limb.pos.y - a.y;
+    const d = Math.hypot(dx, dy) || 1e-6;
+    if (d > max) {
+      limb.pos.x = a.x + (dx / d) * max;
+      limb.pos.y = a.y + (dy / d) * max;
+      const radial = (v.x * dx + v.y * dy) / d;
+      if (radial > 0) {
+        v.x -= (dx / d) * radial;
+        v.y -= (dy / d) * radial;
+      }
+    }
+    land(limb.pos, v, T.COLLAPSE_REST);
+
+    // A limp limb buckles UPWARD, and the drawing has to be told so. `ikJoint` picks
+    // its bend side as "outboard in the torso frame", which is exactly right while
+    // you are climbing and meaningless once the torso is lying down -- outboard is
+    // then straight up or straight down, so half the knees and elbows resolve to
+    // below the floor and the pile grows a V of legs through the ground. Choosing the
+    // side that lifts the joint is both the fix and what a limb resting on the floor
+    // actually does.
+    //
+    // It has to be `bendLock` and not `bend`: ikJoint re-decides `bend` from the
+    // torso frame on every call, so writing it here is simply overwritten at draw
+    // time -- which is what the first attempt at this did, to no visible effect.
+    const perpY = (limb.pos.x - a.x) / d; // y of ikJoint's unit perpendicular
+    if (perpY !== 0) limb.bendLock = perpY > 0 ? -1 : 1;
   }
 }
 
@@ -1175,6 +1334,12 @@ export function stanceFeasible(pts) {
  * torso's right vector passes through zero whenever the limb points sideways,
  * so the knee snaps between the two IK solutions mid-move. `limb.bend` persists
  * the choice and only changes when the preference is unambiguous.
+ *
+ * `limb.bendLock` overrides the whole decision, and exists for one caller: the
+ * collapse on landing. Outboard-in-the-torso-frame is the right rule for a body
+ * that is upright and no rule at all for one lying on the floor -- there, outboard
+ * is straight up or straight down, and half the knees resolve into the ground. The
+ * collapse decides the side from the floor instead. See collapseLimbs.
  */
 export function ikJoint(a, b, boneLen, frame, limb) {
   let dx = b.x - a.x;
@@ -1193,8 +1358,9 @@ export function ikJoint(a, b, boneLen, frame, limb) {
   if (limb.bend === undefined) limb.bend = outboard >= 0 ? 1 : -1;
   else if (Math.abs(outboard) > T.BEND_HYSTERESIS) limb.bend = outboard > 0 ? 1 : -1;
 
+  const bend = limb.bendLock ?? limb.bend;
   return {
-    x: a.x + dx * half + px * h * limb.bend,
-    y: a.y + dy * half + py * h * limb.bend,
+    x: a.x + dx * half + px * h * bend,
+    y: a.y + dy * half + py * h * bend,
   };
 }

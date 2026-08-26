@@ -279,13 +279,50 @@ export const T = {
   // recovery, so a stance being fixed is never mistaken for one being lost.
   FALL_VIOLATION: 30,
   FALL_VIOLATION_TIME: 0.3,
-  // Seconds of lying on the ground before the menu comes back. This used to be the
-  // whole of the fall -- 0.9s of watching yourself drop, with nothing to do -- and
-  // it is now only the beat AFTER you land, because the fall itself is playable: a
-  // hand dragged onto a hold catches you (see catchHold in game.js). So the linger
-  // no longer has to be long enough to read as feedback on its own, and shorter is
-  // better, since by the time you are on the floor you already know what happened.
-  FALL_LINGER: 0.5,
+  // Seconds on the ground before the menu comes back. This used to be the whole of
+  // the fall -- 0.9s of watching yourself drop, with nothing to do -- and it is now
+  // only the beat AFTER you land, because the fall itself is playable: a hand dragged
+  // onto a hold catches you (see catchHold in game.js). So it does not have to be
+  // long enough to read as feedback on its own.
+  // It does have to be long enough to contain the collapse, which is the one thing
+  // that pulled it back up from 0.5. Measured over the 1051 route stances of the
+  // thirty problems, contact to rest is p50 0.35s / p90 0.50s / worst 0.57s, so all
+  // of them are still by the time the menu comes back. A linger that ends mid-flop
+  // cuts away with the body still moving, which reads as the game dropping a frame
+  // rather than as a landing.
+  FALL_LINGER: 0.95,
+  // The landing, which is a collapse and not a landing: nothing about a body that
+  // came off a wall involuntarily lands on its feet, so once the feet touch the
+  // floor every joint goes limp and the figure piles up. See the falling branch of
+  // stepFigure. All five of these are cosmetic in the strict sense -- the attempt is
+  // already over by the time any of them is read -- but the pile is the last frame
+  // of the attempt and it is the one that says what happened to you.
+  //
+  // How far above the ground a limp hand or foot comes to rest: a body has thickness,
+  // and endpoints projected exactly onto y = 0 read as sunk into the floor. The torso
+  // rests higher than this, by the half-width of the bar drawn across it -- see
+  // restOnFloor.
+  COLLAPSE_REST: 5,
+  // Fraction of the impact velocity the body keeps. The legs absorb something, but
+  // they don't hold: at 1.0 the hips slam through the collapse in three frames, and
+  // at 0 the drop restarts from rest and reads as a separate event.
+  COLLAPSE_ABSORB: 0.3,
+  // Minimum sideways speed the chest is given at impact, so the torso always goes
+  // over. Gravity on its own leaves a vertical torso balanced on its hip -- both
+  // ends fall equally and it stands there -- which is the exact pose this replaces.
+  COLLAPSE_TOPPLE: 30,
+  // Velocity kept per substep while limp, and the horizontal scrub applied each time
+  // a point is resting on the floor. Read these together, and read both against
+  // TOPPLE: the damping is what the topple kick has to survive, so it sits an order
+  // off DAMPING (0.72 a substep, i.e. nothing at all after a second) even though both
+  // are "velocity kept per substep" -- on the wall gravity is positional and velocity
+  // is not the driver. At 0.9 the kick was gone inside 50ms and the torso was left
+  // standing on its hip at 26 degrees, i.e. exactly the landing this replaces. 0.97
+  // and a kick of 30 topple all 1051 route stances to flat, and more slowly than a
+  // harder kick does, which is the hesitation of a body going over.
+  // Coming to rest is the floor's job, not the damping's, which is what FRICTION is.
+  COLLAPSE_DAMP: 0.97,
+  COLLAPSE_FRICTION: 0.8,
   // What a catch hands back, if you had less. A catch is nearly always a catch from
   // PUMPED OUT, so without this it is a half-second reprieve and a second fall: the
   // bar is at zero, and the frame after you latch the hold it drops you again for

@@ -17,7 +17,7 @@
  * list rather than five lines of metadata.
  *
  * v1 exposes FEEL and CALIBRATION only. The classes below the fold record why
- * each of the other ~186 leaves is not a slider, and `npm run tune:check`
+ * each of the other ~190 leaves is not a slider, and `npm run tune:check`
  * enforces that every leaf in T is accounted for by one list or the other --
  * which is the direction that actually rots, because it is the one that catches
  * a constant somebody added and nobody classified.
@@ -315,8 +315,21 @@ export const UNTUNED = [
   },
   {
     why: 'free-fall only',
-    note: 'GRAVITY applies once you are already off; MAX_PLAY_W is desktop letterboxing and there is nothing to judge on a phone',
-    keys: ['GRAVITY', 'MAX_PLAY_W'],
+    note:
+      'GRAVITY and the COLLAPSE_* set apply once you are already off, and the collapse ' +
+      'runs after the attempt has ended -- nothing about it is under your hand, and ' +
+      'seeing one costs a whole attempt, so a slider has no feedback loop. They were ' +
+      'settled off a rendered filmstrip of landings instead. MAX_PLAY_W is desktop ' +
+      'letterboxing and there is nothing to judge on a phone',
+    keys: [
+      'GRAVITY',
+      'MAX_PLAY_W',
+      'COLLAPSE_REST',
+      'COLLAPSE_ABSORB',
+      'COLLAPSE_TOPPLE',
+      'COLLAPSE_DAMP',
+      'COLLAPSE_FRICTION',
+    ],
   },
   {
     why: 'cosmetic',

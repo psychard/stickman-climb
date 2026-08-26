@@ -27,7 +27,8 @@ It is dev-only by construction and contributes 0.2 kB to a build. See
 Working and verified: draggable limbs with multitouch, reach limits with body
 lunge, anatomical pose limits, geometric load distribution, stamina with rest and
 recovery, falling — **which you can now catch yourself out of, so the attempt ends at
-the ground rather than the moment you come off** — a balance limit once both hands are
+the ground, where the figure collapses into a pile rather than landing on its feet** —
+a balance limit once both hands are
 off the wall, scrolling camera, seeded walls that are climbable by construction, thirty short boulder problems in six styles across five difficulties
 **regenerated every day from the local date**, top-outs matched with both hands,
 ticks that reset each midnight and are kept per day, and reach rings that run the
@@ -67,11 +68,12 @@ Standing decisions, so they don't get relitigated by accident:
 | **Coming off is not the end of the attempt; hitting the ground is.** While you are in the air you can still drag a hand onto a hold and latch it, which puts you back into `climbing` hanging off one arm. `FALL_LINGER` runs when you land, not when you come off. | Settled — replaced "a fall is a verdict" |
 | **A catch is the ordinary grab.** Same `refreshTargets`, so the same `canReach`, pose cone and `stanceSolvable`, and the same rings. What is relaxed is only what a fall makes meaningless: `TAP_SLOP`, `GRAB_RADIUS`, and hands-only. | Settled — see [Coming off the wall is not the end of the attempt](#coming-off-the-wall-is-not-the-end-of-the-attempt) |
 | **A catch hands back `CATCH_STAMINA`, and that makes `PUMPED OUT` survivable.** Almost every catch is a catch from empty, so with no refund the save is undone on the next frame. The cost is that the pacing mechanic is softer than it was; the knob is a slider and 0 is the coherent other end. | Tolerated, not settled — it is the price of the ask |
+| **Landing is a collapse, not a landing.** Contact is where every joint goes limp: the torso topples, the limbs flop on their own, and the figure ends the attempt as a pile on the floor rather than standing neatly on its feet. It runs after the attempt is over, so it is cosmetic — but it is the last frame the player sees. | Settled — see [The landing is a collapse](#the-landing-is-a-collapse) |
 | **Offline is a cached shell, and an update is offered rather than applied.** A new build waits behind a band on the menu until it's tapped; nothing reloads mid-climb. | Settled |
 | **A wall is a short problem with a top**, not an endless climb: ~430u, ended by matching a finish hold with both hands. Six per level, in styles (traverse, foot match, reachy...), ticked off when topped. | Settled — replaced the endless wall |
 | **Two limbs may share a hold.** Always legal in the sim; now something the generator asks for, in the foot match and in every top-out. | Settled |
 | **The thirty problems are the day's**, seeded from the local date, and the ticks clear with them at each player's own midnight. What was topped on which day is kept. | Settled — replaced the fixed thirty |
-| **Feel constants get a slider; stability and generation constants get `--set`.** A laptop page at `/__tune` drives the phone live, but only for the 38 constants a hand can honestly judge. The ones whose failure mode is a limit cycle or an unclimbable wall reach you through the tool that can see them. | Settled — see [Tuning it live](#tuning-it-live) |
+| **Feel constants get a slider; stability and generation constants get `--set`.** A laptop page at `/__tune` drives the phone live, but only for the 42 constants a hand can honestly judge. The ones whose failure mode is a limit cycle or an unclimbable wall reach you through the tool that can see them. | Settled — see [Tuning it live](#tuning-it-live) |
 | **The tuner reports what to change; it never writes `tuning.js`.** The measured numbers in that file's comments are most of its value, and a mechanical edit leaves them confidently wrong. | Settled — don't add a write endpoint |
 | **`fuzz` has a budget rather than a clean bill.** ~1% of adversarial runs settle with a limb outside its cone, on stances the generator would never build. The gate is a rate, so a regression is visible; the residual is described rather than hidden. | Tolerated, not settled — the fix is in `stanceSolvable`, see [What fuzz still leaves](#what-fuzz-still-leaves) |
 | **The generator prefers stances you can stand up in.** The walk weighs candidates by arm load and keeps the best, rather than committing to the first that merely holds. Arm load and *not* strain, so difficulty is untouched. | Settled — replaced first-feasible |
@@ -745,9 +747,11 @@ the ask was that coming off should not immediately spell the end.
 did not matter where the body was when that expired. Now it runs as long as the height
 it started from, so the falling branch of `stepFigure` stops the figure **on** the
 floor — measured at the feet, not the hip, since the limbs hang a leg's length below it
-— zeroes its velocity, and sets `fig.grounded`, which is what `update` starts
-`FALL_LINGER` on. `FALL_LINGER` dropped 0.9 → 0.5 in the same change: it is no longer
-the feedback for *why* you fell, only a beat to register that you are on the floor.
+— and sets `fig.grounded`, which is what `update` starts `FALL_LINGER` on.
+`FALL_LINGER` is no longer the feedback for *why* you fell, only a beat to register
+that you are on the floor; it is 0.9s because that is what the collapse needs, not
+because the fall needs explaining. See [The landing is a
+collapse](#the-landing-is-a-collapse).
 
 Two smaller things that were bugs waiting to happen:
 
@@ -759,6 +763,67 @@ Two smaller things that were bugs waiting to happen:
   first frame the new stance was anything other than perfect. Velocity is deliberately
   *not* reset: it survives exactly one substep before the reach clamp hauls the body
   in under the hold, which is the jerk of catching something.
+
+### The landing is a collapse
+
+**Hitting the floor stopped the motion, and the pose it stopped in was a lie.** The
+first version of the ground pinned the hip at standing height, zeroed both velocities
+and left the limbs to settle to hanging — so the figure ended every attempt standing
+neatly on its feet, torso upright, in a pose no body arrives at after coming off a wall
+involuntarily. Nothing peels off a boulder problem and sticks the landing.
+
+So contact is not where the motion ends, it is where every joint goes limp. `collapse`
+runs at the moment the feet touch and `collapseLimbs` runs for the rest of the linger,
+and the figure crumples into a pile: measured over the 1051 route stances of the thirty
+problems, contact to rest is p50 0.35s / p90 0.50s / worst 0.57s, and every one of them
+settles into a torso lying flat across the floor with the limbs folded over it. `grounded` still marks the same instant it always did — the fall is over
+there, and `FALL_LINGER` starts there — but the body keeps moving for another third of
+a second inside it. That is the one thing that pulled `FALL_LINGER` back up from 0.5 to
+0.9: a linger that ends mid-flop cuts to the menu with the body still in the air, which
+reads as a dropped frame rather than as a landing.
+
+Five things about it, four of them found by rendering the landings to a filmstrip and
+looking at them:
+
+- **The limbs are what actually reads as limp, and they inherit the fall's full
+  velocity.** The torso keeps only `COLLAPSE_ABSORB` of it — the legs are not holding
+  but they are in the way — while the arms keep travelling at the speed the fall left
+  them and flop. Absorbing everything together looks like a controlled sit-down.
+- **Gravity alone will not topple the torso**, which is the whole reason
+  `COLLAPSE_TOPPLE` exists. Both ends of a vertical torso fall equally, the length
+  constraint holds, the hip's floor clamp catches it, and it is left standing on end —
+  i.e. exactly the landing this replaces. It gets a sideways kick, in the direction it
+  was already going or its lean if it was going nowhere, and the two come out 50/50
+  over the 1051 route stances of the thirty problems.
+- **`COLLAPSE_DAMP` is not the same kind of number as `DAMPING`**, even though both are
+  "velocity kept per substep": on the wall gravity is positional and velocity is not
+  the driver, while here the kick has to survive the damping. So it sits an order off
+  it — 0.97 against 0.72. At 0.9 the kick was gone inside 50ms and the torso settled at
+  26 degrees. Read it together with `COLLAPSE_TOPPLE`: those two settle whether the
+  torso goes over at all, and how fast. Coming to rest is `COLLAPSE_FRICTION`'s job, on
+  the floor, not the damping's.
+- **A limp limb buckles upward, and `ikJoint` had to be told.** It picks its bend side
+  as "outboard in the torso frame", which is right while you are climbing and
+  meaningless once the torso is lying down — outboard is then straight up or straight
+  down, so half the knees and elbows resolved *below the floor* and the pile grew a V
+  of legs through the ground. `limb.bendLock` overrides the choice with the side that
+  lifts the joint. It has to be a separate field: `ikJoint` re-decides `bend` on every
+  call, so writing that one from the solver is silently overwritten at draw time, which
+  is what the first attempt did to no visible effect.
+- **The rest height is per point, not one floor.** The hip and shoulder bars are drawn
+  *across* the torso, so lying flat stands them on end and the torso line has to rest a
+  bar's half-width up (`HIP_HALF`, `SHOULDER_HALF`) while hands and feet rest at
+  `COLLAPSE_REST`. One shared floor puts the whole figure on a single horizontal line —
+  flat rather than piled, with the bars and the head buried. The shoulders being wider
+  than the hips also means a settled torso lies at 85 degrees rather than exactly flat,
+  which is a slump rather than a plank and costs nothing to get.
+
+None of it touches the climbing path: `verify`, `sim`, `jitter`, `fuzz`, `measure` and
+`catch` are all unchanged to the digit, and `catch` still reports a 0.62s median fall
+catchable on 100% of its frames. The whole collapse runs after the attempt has ended,
+which is also why the `COLLAPSE_*` constants are not sliders — see the `free-fall only`
+group in `tools/tune/schema.js`. You cannot tune something with a slider when seeing it
+once costs a whole attempt; the filmstrip is the instrument for these.
 
 ### Two solver traps, both already hit
 
@@ -1536,8 +1601,8 @@ Which is the whole point, and the rig is built around it:
 
 | Class | Settled by | v1 |
 |---|---|---|
-| **Feel** — `CAM_*`, `GRAB_RADIUS`, `DANGLE_LERP`, `TOP_HOLD_TIME`, `DAMPING`… | a hand on a phone; nothing else can | **slider** (15) |
-| **Calibration** — `REST_STRAIN`, `W_*`, `LOAD_*`, `FLEX` | `measure`, against a measured distribution | **slider** (23) |
+| **Feel** — `CAM_*`, `GRAB_RADIUS`, `DANGLE_LERP`, `TOP_HOLD_TIME`, `DAMPING`… | a hand on a phone; nothing else can | **slider** (18) |
+| **Calibration** — `REST_STRAIN`, `W_*`, `LOAD_*`, `FLEX` | `measure`, against a measured distribution | **slider** (24) |
 | **Stability** — `DRAG_PULL`, `LUNGE_*`, `WEDGE_*`, `FOOT_PUSH_*` | `sim` / `jitter` / `fuzz` | `--set` only |
 | **Generation** — `QUALITY_*`, `REUSE*`, `LEVELS[].floor` | `ladder` + `verify` | `--set` only |
 | **Locked** — `SUB_DT`, `WALL_W`, `MAX_SUBSTEPS`, `REF_DAY`… | nothing; don't | refused |
@@ -1604,7 +1669,7 @@ A root `tune.html` would rest on exactly one reason — "Vite's default build in
 
 ### The schema stores no values, and a check enforces it
 
-`tools/tune/schema.js` classifies all 224 leaves of `T` — 38 exposed, 186 in an
+`tools/tune/schema.js` classifies all 235 leaves of `T` — 42 exposed, 193 in an
 `UNTUNED` list with a one-word reason each. It holds no defaults: slider ranges are
 *derived* from whatever `tuning.js` currently says (`UNIT` for the 0..1 fractions,
 `SPAN` for multipliers), so it cannot become a second source of truth for a number.

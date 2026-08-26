@@ -55,7 +55,9 @@ The player comes off the wall if:
    has to be over the base of support. You can be out past it briefly — that is a
    lunge — but not indefinitely.
 
-...and the attempt ends when the falling figure reaches the floor.
+...and the attempt ends when the falling figure reaches the floor — where it
+**collapses into a pile** rather than landing on its feet. There is no stiffness left
+in a body that has just come off involuntarily.
 
 ### Stamina
 
@@ -491,6 +493,27 @@ brief excludes — there is no points system, only the count of thirty that was 
 being kept — and the date chip, which was deliberately inert on the grounds that a
 control which looks live and does nothing is worse than one that doesn't, is now the
 door both ways.
+
+### 2026-08-26 — the landing is a collapse
+
+Asked for directly: the figure used to land on its feet, and it should instead drop
+like a marionette whose strings were cut.
+
+**Contact stops the fall, not the motion.** The ground clamp pinned the hip at standing
+height and zeroed both velocities, so every attempt ended with the figure standing
+upright and tidy — the one pose a body that came off a wall involuntarily never
+arrives at. Now the moment the feet touch, every joint goes limp: the torso topples,
+each limb endpoint falls on its own with nothing but its length and the floor to stop
+it, and the figure comes to rest as a pile in about a third of a second. The linger
+before the menu went back up from 0.5s to 0.9s to contain it.
+
+**Flagged, because it is the exclusion this brief actually names.** "Visual polish" is
+on the not-wanted list and this is visual polish — it changes no rule, costs no
+stamina, and happens entirely after the attempt has ended. It is here because it was
+asked for, and because the pile is the last frame of an attempt and the old one was
+saying something false about what had just happened. It is scoped as tightly as that
+argument allows: nothing about the climbing path moved, and every measured number in
+the harness is unchanged to the digit.
 
 ### Still open
 
